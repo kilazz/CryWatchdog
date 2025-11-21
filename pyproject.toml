@@ -1,0 +1,104 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "AssetWatchdog"
+description = "AssetWatchdog"
+version = "1.0.0"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+authors = [{ name = "kilazz"}]
+
+dependencies = [
+    "PySide6",
+    "qdarkstyle",
+    "lxml",
+    "chardet",
+    "watchdog",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "snakeviz",
+    "py-spy",
+    "tabulate2",
+    "psutil",
+    "tqdm",
+]
+
+[tool.ruff]
+exclude = [
+	"__pycache__",
+	"__pypackages__",
+	".direnv",
+	".eggs",
+	".git",
+	".git-rewrite",
+	".hg",
+	".mypy_cache",
+	".nox",
+	".pants.d",
+	".pyenv",
+	".pytype",
+	".svn",
+	".tox",
+	"_build",
+	"buck-out",
+	"build",
+	"dist",
+	"site-packages",
+    ".bzr",
+    ".ipynb_checkpoints",
+    ".pytest_cache",
+    ".vscode",
+    "node_modules",
+	".ruff_cache",
+	"_src_directxtex_decoder",
+	"app_data",
+	"venv",
+	".venv",
+	".venv-webgpu",
+	".venv-directml",
+	".venv-cuda",
+	".venv-cpu",
+]
+
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle: errors (e.g., indentation, syntax)
+    "W",   # pycodestyle: warnings (e.g., line length)
+    "F",   # Pyflakes: logical errors (undefined names, unused imports)
+    "I",   # isort: sorting and formatting of imports
+    "B",   # flake8-bugbear: finds likely bugs and design problems
+    "UP",  # pyupgrade: upgrades syntax to newer Python versions
+    "SIM", # flake8-simplify: suggests simplifications for complex code
+    "RUF", # Enables Ruff's native, fast, and often unique checks
+]
+
+ignore = ["E501"]
+fixable = ["ALL"]
+unfixable = []
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+exclude = ["app_data*"]
