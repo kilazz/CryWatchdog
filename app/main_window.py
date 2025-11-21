@@ -23,8 +23,19 @@ from PySide6.QtWidgets import (
 )
 
 from app.config import AppConfig, AppState, UIConfig
-from app.tasks import ProjectAnalyzer, ProjectCleaner, ProjectConverter
-from app.ui_dialogs import AnalysisReportDialog, CleanerDialog, LuaToolkitDialog, PackerDialog
+from app.tasks import (
+    ProjectAnalyzer,
+    ProjectCleaner,
+    ProjectConverter,
+    UnusedAssetFinder,
+)
+from app.ui_dialogs import (
+    AnalysisReportDialog,
+    CleanerDialog,
+    LuaToolkitDialog,
+    PackerDialog,
+    UnusedAssetsDialog,
+)
 from app.utils import CoreSignals, Worker
 from app.watcher import WatcherService
 
@@ -45,6 +56,8 @@ class MainWindow(QMainWindow):
         self._setup_window()
         self._setup_ui()
         self._connect_signals()
+
+        # Initialize with default debug state
         self._toggle_debug_log(self.watcher_options.get("show_detailed_log").checkState())
         self._set_state(AppState.IDLE)
 
@@ -62,9 +75,11 @@ class MainWindow(QMainWindow):
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         main_layout = QVBoxLayout(main_widget)
+
         main_layout.addLayout(self._create_top_bar())
         main_layout.addWidget(self._create_watcher_group())
         main_layout.addWidget(self._create_log_view())
+
         self.progress_bar = QProgressBar(self)
         self.statusBar().addPermanentWidget(self.progress_bar)
         self.progress_bar.hide()
@@ -77,25 +92,28 @@ class MainWindow(QMainWindow):
 
         # --- Menus ---
         self.project_tools_button = QPushButton("Project")
-        self.project_tools_button.setMinimumWidth(90)  # FIXED
+        self.project_tools_button.setMinimumWidth(90)
+
         project_tools_menu = QMenu(self)
         self.analyze_action = project_tools_menu.addAction("Analyze Project Files...")
+        self.unused_action = project_tools_menu.addAction("Find Unused Assets (Scavenger)...")  # NEW
         project_tools_menu.addSeparator()
         self.lua_action = project_tools_menu.addAction("Lua Tools...")
         self.clean_action = project_tools_menu.addAction("Clean & Normalize Assets...")
         project_tools_menu.addSeparator()
         self.lc_action = project_tools_menu.addAction("Convert Filenames to Lowercase...")
+
         self.project_tools_button.setMenu(project_tools_menu)
 
         self.utilities_button = QPushButton("Utils")
-        self.utilities_button.setMinimumWidth(90)  # FIXED
+        self.utilities_button.setMinimumWidth(90)
         utilities_menu = QMenu(self)
         self.packer_action = utilities_menu.addAction("Text Packer Tool...")
         self.utilities_button.setMenu(utilities_menu)
 
         # --- Action Button ---
         self.select_button = QPushButton("Select Folder")
-        self.select_button.setMinimumWidth(110)  # FIXED
+        self.select_button.setMinimumWidth(110)
         self.status_label = QLabel("Select a project folder to begin.")
 
         # --- Layout Assembly ---
@@ -111,9 +129,10 @@ class MainWindow(QMainWindow):
         watcher_group = QGroupBox("Real-time Asset Watchdog")
         watcher_layout = QVBoxLayout(watcher_group)
         options_layout = QHBoxLayout()
+
         self.watcher_options = {}
         opts = [
-            ("match_any_texture_extension", "Match Any Texture Extension", True),
+            ("match_any_texture_extension", "Match Any Texture Extension (tif/dds)", True),
             ("allow_ext_change", "Patch on Extension Changes", True),
             ("allow_dir_change", "Patch on Directory Renames", True),
             ("show_detailed_log", "Enable Debug Log (Python)", False),
@@ -140,11 +159,15 @@ class MainWindow(QMainWindow):
         """Connects all signals for the application."""
         self.select_button.clicked.connect(self._select_folder)
         self.toggle_button.clicked.connect(self._toggle_watching)
+
+        # Actions
         self.clean_action.triggered.connect(self._open_cleaner_dialog)
         self.analyze_action.triggered.connect(self._analyze_project)
+        self.unused_action.triggered.connect(self._run_unused_finder)  # NEW CONNECTION
         self.lc_action.triggered.connect(self._run_lc_conversion)
         self.packer_action.triggered.connect(self._open_packer_dialog)
         self.lua_action.triggered.connect(self._open_lua_dialog)
+
         self.watcher_options["show_detailed_log"].stateChanged.connect(self._toggle_debug_log)
 
         # Core signals
@@ -186,6 +209,7 @@ class MainWindow(QMainWindow):
         self.toggle_button.setText(btn_text)
         self.status_label.setText(status_text)
         self.status_label.setStyleSheet(f"color: {color};")
+
         self.select_button.setEnabled(is_idle)
         self.project_tools_button.setEnabled(is_idle and has_project)
         self.utilities_button.setEnabled(is_idle)
@@ -267,6 +291,15 @@ class MainWindow(QMainWindow):
                 return ProjectAnalyzer(self.project_root).run()
 
             self.run_task_in_thread(task, on_complete=self.on_analysis_complete)
+
+    def _run_unused_finder(self):
+        """Runs the unused asset scanner task."""
+        if self.can_run_task():
+
+            def task():
+                return UnusedAssetFinder(self.project_root, self.core_signals).run()
+
+            self.run_task_in_thread(task, on_complete=self.on_unused_scan_complete)
 
     def _open_packer_dialog(self):
         """Opens the packer/unpacker tool dialog."""
@@ -352,6 +385,12 @@ class MainWindow(QMainWindow):
                 max_count = max(len(f"{c:,}") for _, c in items) if items else 0
                 prepared[cat_name] = "\n".join([f"{e:<{max_ext}} : {f'{c:,}':>{max_count}} file(s)" for e, c in items])
         AnalysisReportDialog(self, header, prepared).exec()
+
+    @Slot(object)
+    def on_unused_scan_complete(self, results: dict | None):
+        """Callback for the unused asset finder task."""
+        if results:
+            UnusedAssetsDialog(self, results).exec()
 
     def can_run_task(self, silent: bool = False) -> bool:
         """Checks if the application is in a state that allows a new task to run."""

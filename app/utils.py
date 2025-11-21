@@ -2,6 +2,8 @@
 import html
 import logging
 import os
+import stat
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -13,8 +15,6 @@ from app.config import UIConfig
 
 
 class CoreSignals(QObject):
-    """Defines signals for communication from background tasks to the GUI thread."""
-
     log = Signal(str)
     indexingStarted = Signal()
     indexingFinished = Signal()
@@ -25,8 +25,6 @@ class CoreSignals(QObject):
 
 
 class Worker(QRunnable):
-    """A generic QRunnable worker for executing a function in the QThreadPool."""
-
     def __init__(self, fn: Callable, *args: Any, **kwargs: Any):
         super().__init__()
         self.fn = fn
@@ -36,7 +34,6 @@ class Worker(QRunnable):
 
     @Slot()
     def run(self):
-        """Executes the target function and emits signals based on the outcome."""
         try:
             result = self.fn(*self.args, **self.kwargs)
             self.signals.taskFinished.emit(result)
@@ -45,10 +42,48 @@ class Worker(QRunnable):
             self.signals.criticalError.emit("Task Error", f"A critical error occurred: {e}")
 
 
+def ensure_writable(file_path: Path):
+    """
+    Attempts to make a file writable using Perforce (P4) or OS chmod.
+    Critical for working in game dev environments with version control.
+    """
+    if not file_path.exists():
+        return
+
+    # If already writable, skip
+    if os.access(file_path, os.W_OK):
+        return
+
+    # 1. Try Perforce (P4) checkout
+    try:
+        # Check if 'p4' is available and file is tracked
+        proc = subprocess.run(
+            ["p4", "edit", str(file_path)],
+            capture_output=True,
+            text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        if proc.returncode == 0:
+            logging.info(f"Checked out file via P4: {file_path.name}")
+            return
+    except FileNotFoundError:
+        pass  # P4 not installed or not in PATH
+
+    # 2. Fallback: Force OS write attribute (Git/Local)
+    try:
+        os.chmod(file_path, stat.S_IWRITE)
+        logging.info(f"Removed Read-Only attribute: {file_path.name}")
+    except Exception as e:
+        logging.warning(f"Failed to make {file_path.name} writable: {e}")
+
+
 def atomic_write(file_path: Path, data: Any, **kwargs: Any):
-    """Writes data to a temporary file and then atomically replaces the original."""
+    """
+    Writes data to a temp file, ensures the target is writable, then replaces it.
+    """
     temp_path = file_path.with_suffix(file_path.suffix + ".tmp")
     try:
+        # Prepare temp file
         if isinstance(data, str):
             temp_path.write_text(data, **kwargs)
         elif isinstance(data, bytes):
@@ -56,8 +91,15 @@ def atomic_write(file_path: Path, data: Any, **kwargs: Any):
         elif isinstance(data, ET._ElementTree):
             data.write(str(temp_path), **kwargs)
         else:
-            raise TypeError(f"Unsupported data type for atomic_write: {type(data)}")
+            raise TypeError(f"Unsupported data type: {type(data)}")
+
+        # Ensure target is writable (P4/Git support)
+        if file_path.exists():
+            ensure_writable(file_path)
+
+        # Atomic replace
         os.replace(temp_path, file_path)
+
     except Exception as e:
         logging.error(f"Atomic write to {file_path} failed: {e}")
         if temp_path.exists():
@@ -66,7 +108,6 @@ def atomic_write(file_path: Path, data: Any, **kwargs: Any):
 
 
 def find_files_by_extensions(root_path: Path, extensions: tuple[str, ...]) -> list[Path]:
-    """Recursively finds all files with given extensions in a directory."""
     return [
         Path(root) / filename
         for root, _, files in os.walk(root_path)
@@ -76,8 +117,6 @@ def find_files_by_extensions(root_path: Path, extensions: tuple[str, ...]) -> li
 
 
 class QtLogHandler(logging.Handler):
-    """A logging handler that emits a Qt signal for each log record."""
-
     class LogSignals(QObject):
         log = Signal(str)
 
@@ -86,7 +125,6 @@ class QtLogHandler(logging.Handler):
         self.signals = self.LogSignals()
 
     def emit(self, record):
-        """Emits the formatted log record via a signal as an HTML string."""
         level_map = {
             logging.DEBUG: "color: gray;",
             logging.INFO: "color: white;",

@@ -1,166 +1,176 @@
 # app/asset_handlers.py
 import logging
+import mmap
 import os
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
-
-import chardet
-from lxml import etree as ET
 
 from app.config import AppConfig
 from app.utils import atomic_write
 
 
 class AssetHandler(ABC):
-    """Abstract base class for asset file parsers and rewriters."""
-
     @staticmethod
     @abstractmethod
     def parse(file_path: Path) -> set[str]:
-        """Parses a file and extracts all referenced asset paths."""
         pass
 
     @staticmethod
     @abstractmethod
     def rewrite(file_path: Path, replacements: dict[str, str], is_dir_move: bool):
-        """Rewrites asset paths in a file based on a replacement mapping."""
         pass
 
 
 class XmlAssetHandler(AssetHandler):
-    """Handles parsing and rewriting of XML-based asset files (e.g., .mtl, .xml)."""
+    """
+    Optimized handler using MMAP for reading and REGEX for writing.
+    Preserves original formatting/indentation perfectly.
+    """
 
+    # Patterns for XML/MTL attributes commonly used in CryEngine/Lumberyard
     _EXT_PATTERN = "|".join(re.escape(ext) for ext in AppConfig.TRACKED_ASSET_EXTENSIONS)
-    _REGEX_CACHE = re.compile(
-        r'(?:File|Texture|filename|path|Material)\s*=\s*["\']([^"\']+(' + _EXT_PATTERN + r'))["\']',
+
+    # Regex for finding paths in bytes (for mmap)
+    _BYTES_REGEX = re.compile(
+        rb'(?:File|Texture|filename|path|Material)\s*=\s*["\']([^"\']+(?:' + _EXT_PATTERN.encode("utf-8") + rb'))["\']',
         re.IGNORECASE,
     )
 
     @staticmethod
-    def _get_clean_xml_root_from_content(raw_content: bytes) -> ET.Element | None:
-        """Safely parses byte content into an lxml Element, recovering from errors."""
-        try:
-            if not raw_content or (xml_start_index := raw_content.find(b"<")) == -1:
-                return None
-            clean_content = raw_content[xml_start_index:]
-            parser = ET.XMLParser(recover=True, encoding="utf-8")
-            return ET.fromstring(clean_content, parser)
-        except Exception:
-            try:
-                encoding = chardet.detect(clean_content)["encoding"] or "latin-1"
-                parser = ET.XMLParser(recover=True, encoding=encoding)
-                return ET.fromstring(clean_content, parser)
-            except Exception:
-                return None
-
-    @staticmethod
-    def _get_clean_xml_root(file_path: Path) -> ET.Element | None:
-        """Reads a file and returns a clean lxml Element."""
-        try:
-            return XmlAssetHandler._get_clean_xml_root_from_content(file_path.read_bytes())
-        except Exception:
-            return None
-
-    @staticmethod
     def parse(file_path: Path) -> set[str]:
-        """Parses an XML file using lxml and regex, returning found asset paths."""
+        """Parses file using memory mapping (zero-copy reading)."""
         found_paths = set()
         try:
-            raw_content = file_path.read_bytes()
-            if not raw_content:
+            if file_path.stat().st_size == 0:
                 return set()
+
+            # FIXED: SIM117 - Combined context managers
+            with (
+                open(file_path, "rb") as f,
+                mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm,
+            ):
+                for match in XmlAssetHandler._BYTES_REGEX.finditer(mm):
+                    try:
+                        # Decode only the matched path
+                        path_str = match.group(1).decode("utf-8", errors="ignore")
+                        found_paths.add(path_str.strip().replace(os.path.sep, "/"))
+                    except Exception:
+                        continue
         except OSError as e:
             logging.warning(f"Could not read file {file_path}: {e}")
             return set()
-
-        if (root := XmlAssetHandler._get_clean_xml_root_from_content(raw_content)) is not None:
-            for elem in root.iter():
-                for _, value in elem.attrib.items():
-                    if isinstance(value, str) and value.strip().lower().endswith(AppConfig.TRACKED_ASSET_EXTENSIONS):
-                        found_paths.add(value.strip().replace(os.path.sep, "/"))
-
-        try:
-            content = raw_content.decode("utf-8", errors="ignore")
-            for match in XmlAssetHandler._REGEX_CACHE.finditer(content):
-                found_paths.add(match.group(1).strip().replace(os.path.sep, "/"))
-        except Exception as e:
-            logging.error(f"Regex parsing failed for {file_path.name}: {e}")
 
         return {p.lower() for p in found_paths}
 
     @staticmethod
     def rewrite(file_path: Path, replacements: dict[str, str], is_dir_move: bool):
-        """Rewrites asset paths in an XML file using lxml for precision."""
+        """
+        Rewrites using regex substitution on text content.
+        This preserves custom formatting, comments, and structure better than XML parsers.
+        """
         try:
-            root = XmlAssetHandler._get_clean_xml_root(file_path)
-            if root is None:
-                return
-            tree, changed = ET.ElementTree(root), False
+            # Read as text for replacement (cannot write via mmap safely with length change)
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
+            original_content = content
+
             replacements_lower = {k.lower(): v for k, v in replacements.items()}
 
-            for element in root.iter():
-                for attr_name, attr_value in list(element.attrib.items()):
-                    val_norm = str(attr_value).strip().replace(os.path.sep, "/")
-                    val_lower = val_norm.lower()
-                    new_val = None
+            def replace_callback(match):
+                # Groups: 1=Key+Quote, 2=Path, 3=Quote
+                prefix, old_path, suffix = match.groups()
+                old_path_norm = old_path.strip().replace(os.path.sep, "/")
+                old_path_lower = old_path_norm.lower()
 
-                    if is_dir_move:
-                        old_dir, new_dir = next(iter(replacements.items()))
-                        if val_lower.startswith(old_dir.lower() + "/"):
-                            new_val = new_dir + val_norm[len(old_dir) :]
-                    elif val_lower in replacements_lower:
-                        new_val = replacements_lower[val_lower]
+                new_val = None
 
-                    if new_val is not None:
-                        element.set(attr_name, new_val)
-                        changed = True
+                if is_dir_move:
+                    old_dir, new_dir = next(iter(replacements.items()))
+                    if old_path_lower.startswith(old_dir.lower() + "/"):
+                        # Slice and dice path
+                        remainder = old_path_norm[len(old_dir) :]
+                        new_val = f"{new_dir}{remainder}"
+                elif old_path_lower in replacements_lower:
+                    new_val = replacements_lower[old_path_lower]
 
-            if changed:
-                atomic_write(file_path, tree, encoding="utf-8", xml_declaration=False, pretty_print=True)
-                logging.info(f"  - [OK] Patched XML '{file_path.name}'")
+                if new_val:
+                    return f"{prefix}{new_val}{suffix}"
+                return match.group(0)
+
+            # Regex to capture: (Key=")(Value)(")
+            # We construct it dynamically to match tracked extensions
+            pattern_str = (
+                r'((?:File|Texture|filename|path|Material)\s*=\s*["\'])'
+                r'([^"\']+(?:' + XmlAssetHandler._EXT_PATTERN + r"))"
+                r'(["\'])'
+            )
+            pattern = re.compile(pattern_str, re.IGNORECASE)
+
+            new_content = pattern.sub(replace_callback, content)
+
+            if new_content != original_content:
+                atomic_write(file_path, new_content, encoding="utf-8")
+                logging.info(f"  - [OK] Patched '{file_path.name}' (Format Preserved)")
+
         except Exception as e:
-            logging.error(f"  - [FAIL] Failed to rewrite XML '{file_path.name}': {e}")
+            logging.error(f"  - [FAIL] Failed to rewrite '{file_path.name}': {e}")
 
 
 class LuaAssetHandler(AssetHandler):
-    """Handles parsing and rewriting of Lua script files."""
-
     _EXT_PATTERN = "|".join(re.escape(ext.lstrip(".")) for ext in AppConfig.TRACKED_ASSET_EXTENSIONS)
-    _REGEX_CACHE = re.compile(r"""(['"])([^'"]+\.(?:""" + _EXT_PATTERN + r"""))\1""", re.IGNORECASE)
+    # Bytes regex for mmap
+    _BYTES_REGEX = re.compile(
+        rb'([\'"])([^\'"]+\.(?:' + _EXT_PATTERN.encode("utf-8") + rb"))\1",
+        re.IGNORECASE,
+    )
+    # Text regex for rewrite
+    _TEXT_REGEX = re.compile(r'([\'"])([^\'"]+\.(?:' + _EXT_PATTERN + r"))\1", re.IGNORECASE)
 
     @staticmethod
     def parse(file_path: Path) -> set[str]:
-        """Parses a Lua file with regex to find string literals that are asset paths."""
         try:
-            content = file_path.read_text(encoding="utf-8", errors="ignore")
-            return {
-                m.group(2).strip().replace(os.path.sep, "/").lower()
-                for m in LuaAssetHandler._REGEX_CACHE.finditer(content)
-            }
+            if file_path.stat().st_size == 0:
+                return set()
+            found = set()
+
+            # FIXED: SIM117 - Combined context managers
+            with (
+                open(file_path, "rb") as f,
+                mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm,
+            ):
+                for m in LuaAssetHandler._BYTES_REGEX.finditer(mm):
+                    path_str = m.group(2).decode("utf-8", errors="ignore")
+                    found.add(path_str.strip().replace(os.path.sep, "/").lower())
+            return found
         except Exception as e:
-            logging.error(f"Failed to parse LUA file {file_path.name}: {e}")
+            logging.error(f"Failed to parse LUA {file_path.name}: {e}")
             return set()
 
     @staticmethod
     def rewrite(file_path: Path, replacements: dict[str, str], is_dir_move: bool):
-        """Rewrites asset paths in a Lua file using regex substitution."""
         try:
             content = file_path.read_text(encoding="utf-8", errors="ignore")
-            new_content = content
-            if is_dir_move:
-                old_dir, new_dir = next(iter(replacements.items()))
-                pattern = re.compile(f"(['\"]){re.escape(old_dir)}/([^'\"]*)(['\"])", re.IGNORECASE)
-                new_content = pattern.sub(f"\\g<1>{new_dir}/\\g<2>\\g<3>", content)
-            else:
-                replacements_lower = {old.lower(): new for old, new in replacements.items()}
 
-                def replacer(match: re.Match) -> str:
-                    quote, path = match.group(1), match.group(2)
-                    new_path = replacements_lower.get(path.lower(), path)
+            replacements_lower = {k.lower(): v for k, v in replacements.items()}
+
+            def replacer(match: re.Match) -> str:
+                quote, path = match.group(1), match.group(2)
+                path_norm = path.replace(os.path.sep, "/")
+                path_lower = path_norm.lower()
+
+                new_path = None
+                if is_dir_move:
+                    old_dir, new_dir = next(iter(replacements.items()))
+                    if path_lower.startswith(old_dir.lower() + "/"):
+                        new_path = f"{new_dir}{path_norm[len(old_dir) :]}"
+                else:
+                    new_path = replacements_lower.get(path_lower)
+
+                if new_path:
                     return f"{quote}{new_path}{quote}"
+                return match.group(0)
 
-                new_content = LuaAssetHandler._REGEX_CACHE.sub(replacer, content)
+            new_content = LuaAssetHandler._TEXT_REGEX.sub(replacer, content)
 
             if content != new_content:
                 atomic_write(file_path, new_content, encoding="utf-8")
@@ -169,7 +179,6 @@ class LuaAssetHandler(AssetHandler):
             logging.error(f"  - [FAIL] Failed to rewrite LUA '{file_path.name}': {e}")
 
 
-# Mapping of file extensions to their handler classes
 ASSET_HANDLERS = {
     ".mtl": XmlAssetHandler,
     ".xml": XmlAssetHandler,

@@ -60,10 +60,6 @@ exclude = [
 	"app_data",
 	"venv",
 	".venv",
-	".venv-webgpu",
-	".venv-directml",
-	".venv-cuda",
-	".venv-cpu",
 ]
 
 line-length = 120

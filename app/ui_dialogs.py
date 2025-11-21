@@ -3,10 +3,12 @@ import contextlib
 import sys
 import time
 from pathlib import Path
+from typing import ClassVar
 
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -153,19 +155,53 @@ class CleanerDialog(QDialog):
 class AnalysisReportDialog(QDialog):
     """A dialog to display the project analysis report."""
 
-    EXT_CATEGORIES = {
-        "Textures": {".dds", ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".gif", ".hdr", ".exr", ".gfx"},
-        "Models": {".cgf", ".cga", ".chr", ".skin", ".fbx", ".obj", ".3ds"},
-        "Scripts & Configs": {".lua", ".mtl", ".xml", ".lyr", ".lay", ".cdf", ".json", ".cfg", ".ini"},
-        "Archives": {".pak", ".zip", ".rar", ".7z", ".dat", ".bak"},
-        "Audio": {".wav", ".ogg", ".mp3"},
+    # Expanded categories to capture CryEngine/Lumberyard specific files from "Other"
+    EXT_CATEGORIES: ClassVar[dict[str, set[str]]] = {
+        "Textures": {".dds", ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".gif", ".hdr", ".exr", ".img"},
+        "UI & Scaleform": {".gfx", ".usm", ".swf", ".xml", ".ttf", ".otf"},
+        "Models & Physics": {".cgf", ".cga", ".chr", ".skin", ".fbx", ".obj", ".3ds", ".phys", ".abc"},
+        "Animations": {
+            ".caf",
+            ".i_caf",
+            ".bspace",
+            ".comb",
+            ".anm",
+            ".chrparams",
+            ".anim",
+            ".animevents",
+            ".animsettings",
+            ".fsq",
+            ".cal",
+            ".ag",
+            ".seq",
+        },
+        "Audio & Dialogue": {".wav", ".ogg", ".mp3", ".fsb", ".fev", ".fdp", ".dlg", ".sfk", ".bnk"},
+        "Scripts & Data": {
+            ".lua",
+            ".mtl",
+            ".lyr",
+            ".lay",
+            ".cdf",
+            ".json",
+            ".cfg",
+            ".ini",
+            ".txt",
+            ".csv",
+            ".xls",
+            ".adb",
+            ".ent",
+            ".clcdb",
+            ".bai",
+        },
+        "Archives & Backups": {".pak", ".zip", ".rar", ".7z", ".dat", ".bak", ".bak2"},
+        "System & Logs": {".dll", ".exe", ".pdb", ".bin", ".raw", ".log", ".dmp", ".py"},
         "Other Files": {},
     }
 
     def __init__(self, parent, header_text: str, prepared_data: dict[str, str]):
         super().__init__(parent)
         self.setWindowTitle("Analysis Report")
-        self.setGeometry(100, 100, 1400, 800)
+        self.setGeometry(100, 100, 1600, 800)  # Made wider for more columns
         main_layout = QVBoxLayout(self)
         main_layout.addWidget(QLabel(header_text))
         columns_layout = QHBoxLayout()
@@ -180,6 +216,7 @@ class AnalysisReportDialog(QDialog):
                 content_label = QLabel(content)
                 content_label.setFont(UIConfig.FONT_MONOSPACE)
                 content_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                content_label.setAlignment(Qt.AlignmentFlag.AlignTop)
                 col_layout.addWidget(content_label)
                 col_layout.addStretch()
                 columns_layout.addLayout(col_layout)
@@ -187,6 +224,70 @@ class AnalysisReportDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         main_layout.addWidget(buttons)
+
+
+class UnusedAssetsDialog(QDialog):
+    """
+    Dialog to display the results of the Unused Asset Finder task.
+    Allows users to view orphaned files and copy the list to clipboard.
+    """
+
+    def __init__(self, parent, results: dict):
+        super().__init__(parent)
+        self.setWindowTitle(f"Unused Assets Report (Time: {results['duration']:.2f}s)")
+        self.resize(600, 700)
+
+        layout = QVBoxLayout(self)
+
+        # Header Info
+        info_group = QGroupBox("Scan Summary")
+        info_layout = QVBoxLayout(info_group)
+        info_layout.addWidget(QLabel(f"Total Assets Scanned: {results['total_assets']:,}"))
+
+        count_label = QLabel(f"Potential Unused Assets: {len(results['unused_files'])}")
+        if results["unused_files"]:
+            count_label.setStyleSheet(f"color: {UIConfig.COLOR_ERROR}; font-weight: bold;")
+        else:
+            count_label.setStyleSheet(f"color: {UIConfig.COLOR_SUCCESS};")
+        info_layout.addWidget(count_label)
+        layout.addWidget(info_group)
+
+        # List Widget
+        layout.addWidget(QLabel("Orphaned Files (Not referenced by any Level, Material, or Script):"))
+        self.list_widget = QTreeWidget()
+        self.list_widget.setHeaderLabel("File Path (Relative)")
+        self.list_widget.setFont(UIConfig.FONT_MONOSPACE)
+
+        for f in results["unused_files"]:
+            item = QTreeWidgetItem([f])
+            # Mark text slightly red for visibility
+            item.setForeground(0, QColor(UIConfig.COLOR_ERROR))
+            self.list_widget.addTopLevelItem(item)
+
+        layout.addWidget(self.list_widget)
+
+        # Buttons
+        btn_box = QHBoxLayout()
+        copy_btn = QPushButton("Copy List to Clipboard")
+        copy_btn.clicked.connect(self._copy_to_clipboard)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+
+        btn_box.addWidget(copy_btn)
+        btn_box.addStretch()
+        btn_box.addWidget(close_btn)
+        layout.addLayout(btn_box)
+
+    def _copy_to_clipboard(self):
+        if self.list_widget.topLevelItemCount() == 0:
+            return
+
+        text = "\n".join(
+            [self.list_widget.topLevelItem(i).text(0) for i in range(self.list_widget.topLevelItemCount())]
+        )
+        QApplication.clipboard().setText(text)
+        QMessageBox.information(self, "Copied", f"{self.list_widget.topLevelItemCount()} paths copied to clipboard.")
 
 
 class PackerDialog(QDialog):
@@ -419,7 +520,6 @@ class LuaToolkitDialog(QDialog):
                 "path_error": ("📁", UIConfig.COLOR_ERROR),
             }
             for r in results:
-                # FIXED: Order swapped to define variables before use
                 icon, color_name = status_map.get(r.status, ("", "white"))
                 item = QTreeWidgetItem(
                     [str(r.relative_path), f"{icon} {r.status.replace('_', ' ').title()}", r.message, r.encoding]

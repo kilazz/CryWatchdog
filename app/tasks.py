@@ -11,6 +11,7 @@ from pathlib import Path
 
 import chardet
 
+from app.asset_handlers import ASSET_HANDLERS
 from app.config import AppConfig, CleanupStatus, LuaFileAnalysisResult
 from app.utils import CoreSignals, atomic_write, find_files_by_extensions
 
@@ -18,14 +19,20 @@ from app.utils import CoreSignals, atomic_write, find_files_by_extensions
 def _cleaner_process_file_worker(file_path: Path, options: dict) -> tuple[CleanupStatus, str]:
     """Worker function for the project cleaner, processes a single file."""
     try:
+        # Read raw bytes
         original_bytes = file_path.read_bytes()
         if not original_bytes:
             return CleanupStatus.SKIPPED, "File is empty"
 
-        encoding = chardet.detect(original_bytes)["encoding"] or "utf-8"
+        # Detect encoding
+        detected = chardet.detect(original_bytes)
+        encoding = detected["encoding"] or "utf-8"
+
+        # Decode
         original_text = original_bytes.decode(encoding, errors="replace")
         processed_text, actions = original_text, []
 
+        # 1. Strip BOM / Header (often found in XMLs saved by specific editors)
         if (
             options.get("strip_bom")
             and file_path.suffix.lower() in AppConfig.XML_EXTENSIONS
@@ -34,23 +41,31 @@ def _cleaner_process_file_worker(file_path: Path, options: dict) -> tuple[Cleanu
             processed_text = original_text[first_char_index:]
             actions.append("stripped header")
 
+        # 2. Path & String Normalization
         if any(options.get(k) for k in ["normalize_paths", "resolve_redundant_paths", "convert_to_lowercase"]):
             text_before = processed_text
 
             def processor(match: re.Match) -> str:
                 key_eq, quote, path_content, comma_ws = match.groups()
+                # Skip non-file strings (must have extension)
                 if "." not in path_content:
                     return match.group(0)
 
                 modified_path = path_content
+
                 if options.get("normalize_paths"):
                     modified_path = modified_path.replace("\\", "/")
+
                 if options.get("resolve_redundant_paths"):
+                    # e.g. "textures/../objects/file.cgf" -> "objects/file.cgf"
                     modified_path = os.path.normpath(modified_path).replace(os.path.sep, "/")
+
                 if options.get("convert_to_lowercase"):
                     modified_path = modified_path.lower()
+
                 return f"{key_eq}{quote}{modified_path}{quote}{comma_ws}"
 
+            # Regex to find "Key='Value'" patterns
             regex = re.compile(
                 r"(\w+\s*=\s*)" + r'(["\'])' + r'([^"\']+\.[\w\d]+)' + r"\2" + r"(\s*,?\s*)",
                 re.IGNORECASE,
@@ -59,28 +74,38 @@ def _cleaner_process_file_worker(file_path: Path, options: dict) -> tuple[Cleanu
             if processed_text != text_before:
                 actions.append("cleaned paths")
 
+        # 3. Trim Whitespace
         if options.get("trim_whitespace"):
             lines = processed_text.splitlines()
             processed_text = "\n".join([line.rstrip() for line in lines])
+            # Ensure single newline at EOF
             if original_text and original_text.endswith(("\n", "\r")) and not processed_text.endswith(("\n", "\r")):
                 processed_text += os.linesep
             if len(processed_text) != len(original_text):
                 actions.append("trimmed whitespace")
 
+        # If nothing changed, exit early
         if not actions:
             return CleanupStatus.UNCHANGED, f"Already clean ({encoding})"
 
+        # 4. Encoding & Line Endings Normalization
         final_encoding = encoding
         final_newline = None
+
         if options.get("normalize_encoding"):
             final_encoding = options.get("target_encoding", "utf-8")
-            newline_map = {"CRLF (Windows)": "\r\n", "LF (Unix/macOS)": "\n", "CR (Classic Mac OS)": "\r"}
+            newline_map = {
+                "CRLF (Windows)": "\r\n",
+                "LF (Unix/macOS)": "\n",
+                "CR (Classic Mac OS)": "\r",
+            }
             final_newline = newline_map.get(options.get("newline_type_label"), "\r\n")
-            newline_label = final_newline.replace("\r\n", "CRLF").replace("\n", "LF").replace("\r", "CR")
-            actions.append(f"normalized to {final_encoding} ({newline_label})")
+            actions.append(f"normalized to {final_encoding}")
 
+        # Atomic Write (Handles P4/Git Read-Only check via utils.py)
         atomic_write(file_path, processed_text, encoding=final_encoding, newline=final_newline)
         return CleanupStatus.MODIFIED, f"Cleaned ({', '.join(sorted(actions))})"
+
     except Exception as e:
         return CleanupStatus.ERROR, str(e)
 
@@ -94,13 +119,17 @@ class ProjectCleaner:
     def run(self, **options: bool) -> dict:
         logging.info("=" * 30 + "\n🚀 Starting Project Cleanup Task...")
         start_time = time.time()
+
         files_to_process = find_files_by_extensions(self.project_root, tuple(AppConfig.HANDLED_TEXT_EXTENSIONS))
         if not files_to_process:
             return {"summary": "No target files found.", "failed_files": []}
 
-        stats, failed_files = Counter(), []
+        stats = Counter()
+        failed_files = []
+
         with ProcessPoolExecutor(max_workers=os.cpu_count() or 1) as executor:
             future_map = {executor.submit(_cleaner_process_file_worker, f, options): f for f in files_to_process}
+
             for i, future in enumerate(as_completed(future_map), 1):
                 self.signals.progressUpdated.emit(i, len(files_to_process))
                 file_path = future_map[future]
@@ -153,22 +182,31 @@ class ProjectConverter:
         logging.info("=" * 50 + f"\n🔡 Starting filename conversion in '{self.project_root}' to lowercase...")
         renamed_count, error_count = 0, 0
         all_paths = list(self.project_root.rglob("*"))
+
         for i, path in enumerate(reversed(all_paths), 1):
             self.signals.progressUpdated.emit(i, len(all_paths))
+
             if path.name == path.name.lower():
                 continue
+
             new_path = path.with_name(path.name.lower())
+
+            # Case-insensitive FS collision check
             if new_path.exists() and not path.samefile(new_path):
                 logging.error(f"  - [FAIL] Conflict: '{new_path.name}' already exists. Skipping.")
                 error_count += 1
                 continue
+
             try:
+                # Note: On P4/Git driven repos, renaming usually requires specific commands.
+                # This is a simple OS rename.
                 path.rename(new_path)
                 logging.info(f"  - [OK] Renamed: {path.name} -> {new_path.name}")
                 renamed_count += 1
             except OSError as e:
                 logging.error(f"  - [FAIL] Could not rename {path.name}: {e}")
                 error_count += 1
+
         summary = f"Conversion complete. Renamed {renamed_count} items with {error_count} errors."
         logging.info(f"✅ {summary}")
         return {"summary": summary}
@@ -232,7 +270,6 @@ class LuaToolkit:
         self._find_executables()
 
     def _find_executables(self):
-        """Finds luac and stylua executables."""
         script_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
         if (luac := script_dir / AppConfig.LUA_COMPILER_EXE_NAME).is_file():
             self.luac_path = luac
@@ -240,7 +277,6 @@ class LuaToolkit:
             self.stylua_path = stylua
 
     def _run_command(self, command: list[str]) -> tuple[bool, str]:
-        """Runs an external command and captures its output."""
         try:
             creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
             proc = subprocess.run(
@@ -257,7 +293,6 @@ class LuaToolkit:
             return False, f"Exception: {e}"
 
     def _check_encoding(self, file_path: Path) -> str:
-        """Determines the encoding of a file."""
         try:
             content = file_path.read_bytes()
             if content.startswith(b"\xef\xbb\xbf"):
@@ -270,11 +305,11 @@ class LuaToolkit:
             return "Read Error"
 
     def run_diagnostics(self) -> list[LuaFileAnalysisResult]:
-        """Runs syntax and encoding checks on all .lua files in the project."""
         logging.info("=" * 50 + "\n📊 Starting Lua Diagnostics Task...")
         if not self.luac_path:
             logging.error(f"{AppConfig.LUA_COMPILER_EXE_NAME} not found.")
             return []
+
         lua_files = list(self.project_root.rglob("*.lua"))
         if not lua_files:
             return []
@@ -283,6 +318,7 @@ class LuaToolkit:
         for i, file_path in enumerate(lua_files, 1):
             self.signals.progressUpdated.emit(i, len(lua_files))
             relative_path = file_path.relative_to(self.project_root).as_posix()
+
             if AppConfig.INVALID_PATH_CHARS_RE.search(str(file_path)):
                 results.append(
                     LuaFileAnalysisResult(
@@ -294,13 +330,14 @@ class LuaToolkit:
             is_ok, msg = self._run_command([str(self.luac_path), "-p", str(file_path)])
             encoding = self._check_encoding(file_path)
             status = "syntax_error" if not is_ok else "encoding_issue" if "UTF-8" not in encoding else "ok"
+
             if status != "ok":
                 results.append(LuaFileAnalysisResult(relative_path, is_ok, msg or "OK", encoding, status))
+
         logging.info("✅ Lua diagnostics complete.")
         return results
 
     def run_formatting(self, config: dict) -> dict:
-        """Formats all .lua files using stylua with the given configuration."""
         logging.info("=" * 50 + "\n💅 Starting Lua Formatting Task...")
         if not self.stylua_path:
             return {"summary": "Formatting failed: stylua.exe not found."}
@@ -319,11 +356,105 @@ class LuaToolkit:
             logging.error(f"Formatting command failed. Error: {message}")
             return {"summary": "Formatting task failed. See log for details."}
 
-        # Extract summary from stylua's output
         formatted_match = re.search(r"Formatted (\d+) files", message)
         unchanged_match = re.search(r"Unchanged (\d+) files", message)
         formatted = int(formatted_match.group(1)) if formatted_match else 0
         unchanged = int(unchanged_match.group(1)) if unchanged_match else 0
+
         summary = f"Formatting complete. Formatted: {formatted}, Unchanged: {unchanged}."
         logging.info(f"✅ {summary}")
         return {"summary": summary}
+
+
+def _finder_parse_wrapper(file_path: Path) -> set[str]:
+    """Static wrapper to call handlers, used by ProcessPoolExecutor."""
+    Handler = ASSET_HANDLERS.get(file_path.suffix.lower())
+    if Handler:
+        return Handler.parse(file_path)
+    return set()
+
+
+class UnusedAssetFinder:
+    """
+    Task to find 'Orphaned' assets - files that exist on disk
+    but are not referenced by any material, level, or script.
+    """
+
+    def __init__(self, project_root: Path, signals: CoreSignals):
+        self.project_root = project_root
+        self.signals = signals
+
+    def run(self) -> dict:
+        logging.info("=" * 30 + "\n🔍 Starting Unused Asset Scan...")
+        start_time = time.time()
+
+        # 1. Index all files on disk
+        all_assets_stems = set()
+        asset_map = {}  # stem -> relative_path
+        container_files = []
+
+        # Extensions we consider "Assets" (Textures, Models)
+        # Note: CryEngine often references .tif, but .dds exists on disk.
+        # We track by 'stem' (filename without extension) to bridge this gap.
+        asset_exts = AppConfig.TEXTURE_EXTENSIONS.union({".cgf", ".cga", ".chr", ".skin"})
+
+        # Extensions we parse for references
+        container_exts = set(ASSET_HANDLERS.keys())
+
+        logging.info("Indexing filesystem...")
+        for root, _, files in os.walk(self.project_root):
+            for f in files:
+                path = Path(root) / f
+                ext = path.suffix.lower()
+                rel_path = path.relative_to(self.project_root).as_posix()
+
+                if ext in asset_exts:
+                    # Store both full path and a normalized 'stem path' for fuzzy matching
+                    # e.g. "objects/prop.cgf" -> "objects/prop"
+                    stem_path = Path(rel_path).with_suffix("").as_posix().lower()
+                    all_assets_stems.add(stem_path)
+                    asset_map[stem_path] = rel_path
+
+                if ext in container_exts:
+                    container_files.append(path)
+
+        logging.info(f"Found {len(all_assets_stems)} unique asset stems and {len(container_files)} containers.")
+
+        # 2. Parse all containers to find references (Multi-threaded)
+        referenced_stems = set()
+        processed_count = 0
+
+        with ProcessPoolExecutor(max_workers=os.cpu_count() or 1) as executor:
+            future_map = {executor.submit(_finder_parse_wrapper, f): f for f in container_files}
+
+            for future in as_completed(future_map):
+                processed_count += 1
+                if processed_count % 50 == 0:
+                    self.signals.progressUpdated.emit(processed_count, len(container_files))
+
+                found_refs = future.result()
+                for ref in found_refs:
+                    # Normalize reference to stem for comparison
+                    # e.g. "objects/prop.tif" -> "objects/prop"
+                    ref_stem = Path(ref).with_suffix("").as_posix().lower()
+                    referenced_stems.add(ref_stem)
+
+        # 3. Calculate Difference (Assets - References)
+        unused_assets = []
+
+        logging.info("Analyzing usage...")
+        for stem in all_assets_stems:
+            if stem not in referenced_stems:
+                # If the stem isn't referenced, the file is likely unused
+                unused_assets.append(asset_map[stem])
+
+        duration = time.time() - start_time
+        summary = f"Scan Complete. Found {len(unused_assets)} unused assets."
+        logging.info(f"✅ {summary}")
+
+        return {
+            "summary": summary,
+            "unused_files": sorted(unused_assets),
+            "total_assets": len(all_assets_stems),
+            "duration": duration,
+        }

@@ -2,6 +2,7 @@
 import re
 from collections import namedtuple
 from enum import Enum, auto
+from typing import ClassVar
 
 from PySide6.QtGui import QFont
 
@@ -9,7 +10,8 @@ from PySide6.QtGui import QFont
 class AppConfig:
     """Encapsulates all core application configurations and constants."""
 
-    TEXTURE_EXTENSIONS: set[str] = {
+    # Mutable class attributes annotated with ClassVar to satisfy RUF012
+    TEXTURE_EXTENSIONS: ClassVar[set[str]] = {
         ".dds",
         ".tif",
         ".tiff",
@@ -23,6 +25,7 @@ class AppConfig:
         ".exr",
         ".gfx",
     }
+
     TRACKED_ASSET_EXTENSIONS: tuple[str, ...] = (
         ".dds",
         ".tif",
@@ -45,8 +48,10 @@ class AppConfig:
         ".skin",
         ".adb",
     )
-    HANDLED_TEXT_EXTENSIONS: set[str] = {".mtl", ".xml", ".lay", ".lyr", ".cdf", ".lua"}
-    XML_EXTENSIONS: set[str] = {".mtl", ".xml", ".lay", ".lyr", ".cdf"}
+
+    HANDLED_TEXT_EXTENSIONS: ClassVar[set[str]] = {".mtl", ".xml", ".lay", ".lyr", ".cdf", ".lua"}
+    XML_EXTENSIONS: ClassVar[set[str]] = {".mtl", ".xml", ".lay", ".lyr", ".cdf"}
+
     LOG_MAX_BLOCK_COUNT: int = 5000
     LUA_COMPILER_EXE_NAME: str = "luac54.exe"
     STYLUO_EXE_NAME: str = "stylua.exe"
