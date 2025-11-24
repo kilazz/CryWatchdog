@@ -15,6 +15,11 @@ from app.config import UIConfig
 
 
 class CoreSignals(QObject):
+    """
+    Defines the signals used for communication between worker threads
+    and the main GUI thread.
+    """
+
     log = Signal(str)
     indexingStarted = Signal()
     indexingFinished = Signal()
@@ -25,6 +30,10 @@ class CoreSignals(QObject):
 
 
 class Worker(QRunnable):
+    """
+    Generic worker thread for running tasks in the background.
+    """
+
     def __init__(self, fn: Callable, *args: Any, **kwargs: Any):
         super().__init__()
         self.fn = fn
@@ -45,7 +54,8 @@ class Worker(QRunnable):
 def ensure_writable(file_path: Path):
     """
     Attempts to make a file writable using Perforce (P4) or OS chmod.
-    Critical for working in game dev environments with version control.
+    Critical for working in game dev environments (Perforce/Git) where files
+    might be Read-Only.
     """
     if not file_path.exists():
         return
@@ -80,12 +90,21 @@ def ensure_writable(file_path: Path):
 def atomic_write(file_path: Path, data: Any, **kwargs: Any):
     """
     Writes data to a temp file, ensures the target is writable, then replaces it.
+    Uses standard 'open()' instead of 'write_text' to ensure the 'newline'
+    parameter is correctly applied on all Python versions/platforms.
     """
     temp_path = file_path.with_suffix(file_path.suffix + ".tmp")
     try:
         # Prepare temp file
         if isinstance(data, str):
-            temp_path.write_text(data, **kwargs)
+            # Extract arguments specifically for open()
+            encoding = kwargs.get("encoding", "utf-8")
+            newline = kwargs.get("newline")
+
+            # Use open() context manager to strictly control line endings
+            with open(temp_path, "w", encoding=encoding, newline=newline) as f:
+                f.write(data)
+
         elif isinstance(data, bytes):
             temp_path.write_bytes(data)
         elif isinstance(data, ET._ElementTree):
@@ -102,12 +121,16 @@ def atomic_write(file_path: Path, data: Any, **kwargs: Any):
 
     except Exception as e:
         logging.error(f"Atomic write to {file_path} failed: {e}")
+        # Clean up temp file on failure
         if temp_path.exists():
             temp_path.unlink(missing_ok=True)
         raise
 
 
 def find_files_by_extensions(root_path: Path, extensions: tuple[str, ...]) -> list[Path]:
+    """
+    Recursively finds all files in root_path matching the given extensions.
+    """
     return [
         Path(root) / filename
         for root, _, files in os.walk(root_path)
@@ -117,6 +140,11 @@ def find_files_by_extensions(root_path: Path, extensions: tuple[str, ...]) -> li
 
 
 class QtLogHandler(logging.Handler):
+    """
+    Custom logging handler that emits a Qt signal for every log record,
+    allowing logs to be displayed in the GUI with HTML formatting.
+    """
+
     class LogSignals(QObject):
         log = Signal(str)
 

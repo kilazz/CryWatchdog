@@ -17,33 +17,39 @@ from app.utils import CoreSignals, atomic_write, find_files_by_extensions
 
 
 def _cleaner_process_file_worker(file_path: Path, options: dict) -> tuple[CleanupStatus, str]:
-    """Worker function for the project cleaner, processes a single file."""
+    """
+    Worker function for the project cleaner.
+    FIXED: Now compares bytes to ensure 'Modified' is only returned if actual changes occur.
+    """
     try:
-        # Read raw bytes
+        # 1. Read raw bytes
         original_bytes = file_path.read_bytes()
         if not original_bytes:
             return CleanupStatus.SKIPPED, "File is empty"
 
-        # Detect encoding
+        # 2. Detect encoding
         detected = chardet.detect(original_bytes)
         encoding = detected["encoding"] or "utf-8"
 
-        # Decode
+        # 3. Decode to text
         original_text = original_bytes.decode(encoding, errors="replace")
-        processed_text, actions = original_text, []
+        processed_text = original_text
+        actions = []
 
-        # 1. Strip BOM / Header (often found in XMLs saved by specific editors)
+        # --- Step A: Content Logic (BOM, Paths, Trimming) ---
+
+        # A.1 Strip BOM / Header
         if (
             options.get("strip_bom")
             and file_path.suffix.lower() in AppConfig.XML_EXTENSIONS
-            and (first_char_index := original_text.find("<")) > 0
+            and (first_char_index := processed_text.find("<")) > 0
         ):
-            processed_text = original_text[first_char_index:]
+            processed_text = processed_text[first_char_index:]
             actions.append("stripped header")
 
-        # 2. Path & String Normalization
+        # A.2 Path & String Normalization
         if any(options.get(k) for k in ["normalize_paths", "resolve_redundant_paths", "convert_to_lowercase"]):
-            text_before = processed_text
+            text_before_paths = processed_text
 
             def processor(match: re.Match) -> str:
                 key_eq, quote, path_content, comma_ws = match.groups()
@@ -71,38 +77,73 @@ def _cleaner_process_file_worker(file_path: Path, options: dict) -> tuple[Cleanu
                 re.IGNORECASE,
             )
             processed_text = regex.sub(processor, processed_text)
-            if processed_text != text_before:
+            if processed_text != text_before_paths:
                 actions.append("cleaned paths")
 
-        # 3. Trim Whitespace
+        # A.3 Trim Whitespace
         if options.get("trim_whitespace"):
             lines = processed_text.splitlines()
-            processed_text = "\n".join([line.rstrip() for line in lines])
-            # Ensure single newline at EOF
-            if original_text and original_text.endswith(("\n", "\r")) and not processed_text.endswith(("\n", "\r")):
-                processed_text += os.linesep
-            if len(processed_text) != len(original_text):
+            # Join with generic newline temporarily
+            trimmed_text = "\n".join([line.rstrip() for line in lines])
+
+            # Restore trailing newline if original had it
+            if original_text and original_text.endswith(("\n", "\r")) and not trimmed_text.endswith("\n"):
+                trimmed_text += "\n"
+
+            # Check if content changed (ignoring line ending differences for now)
+            if trimmed_text.replace("\n", "") != processed_text.replace("\r", "").replace("\n", ""):
                 actions.append("trimmed whitespace")
 
-        # If nothing changed, exit early
-        if not actions:
-            return CleanupStatus.UNCHANGED, f"Already clean ({encoding})"
+            processed_text = trimmed_text
 
-        # 4. Encoding & Line Endings Normalization
+        # --- Step B: Encoding & Line Endings (The Fix) ---
+
         final_encoding = encoding
         final_newline = None
 
         if options.get("normalize_encoding"):
             final_encoding = options.get("target_encoding", "utf-8")
+
             newline_map = {
                 "CRLF (Windows)": "\r\n",
                 "LF (Unix/macOS)": "\n",
                 "CR (Classic Mac OS)": "\r",
             }
-            final_newline = newline_map.get(options.get("newline_type_label"), "\r\n")
-            actions.append(f"normalized to {final_encoding}")
+            # Default to CRLF if not specified
+            label = options.get("newline_type_label")
+            final_newline = newline_map.get(label, "\r\n")
 
-        # Atomic Write (Handles P4/Git Read-Only check via utils.py)
+            # 1. Normalize in-memory text to pure \n first (Python internal state)
+            processed_text_lf = processed_text.replace("\r\n", "\n").replace("\r", "\n")
+
+            # 2. Simulate the bytes that WILL be written to disk to check for changes
+            # We explicitly replace \n with the target newline to mimic file writing
+            text_for_comparison = processed_text_lf.replace("\n", final_newline)
+
+            try:
+                new_bytes = text_for_comparison.encode(final_encoding)
+            except Exception:
+                # If encoding fails during check, assume modified to be safe
+                new_bytes = None
+
+            # 3. Compare bytes. Only flag as "modified" if bytes are different
+            # AND we haven't already flagged modification in Step A.
+            if new_bytes is not None and new_bytes != original_bytes and not actions:
+                actions.append(f"normalized to {final_encoding} / {label}")
+
+            # Update the text variable for the final write
+            processed_text = processed_text_lf
+
+        # --- Final Decision ---
+
+        # If the 'actions' list is empty, it means:
+        # 1. No content logic (paths/trim) triggered.
+        # 2. The byte comparison showed the file on disk is ALREADY exactly what we want.
+        if not actions:
+            return CleanupStatus.UNCHANGED, f"Already clean ({encoding})"
+
+        # Write to disk
+        # Note: atomic_write with text uses open(..., newline=final_newline)
         atomic_write(file_path, processed_text, encoding=final_encoding, newline=final_newline)
         return CleanupStatus.MODIFIED, f"Cleaned ({', '.join(sorted(actions))})"
 
@@ -394,8 +435,6 @@ class UnusedAssetFinder:
         container_files = []
 
         # Extensions we consider "Assets" (Textures, Models)
-        # Note: CryEngine often references .tif, but .dds exists on disk.
-        # We track by 'stem' (filename without extension) to bridge this gap.
         asset_exts = AppConfig.TEXTURE_EXTENSIONS.union({".cgf", ".cga", ".chr", ".skin"})
 
         # Extensions we parse for references
@@ -410,7 +449,6 @@ class UnusedAssetFinder:
 
                 if ext in asset_exts:
                     # Store both full path and a normalized 'stem path' for fuzzy matching
-                    # e.g. "objects/prop.cgf" -> "objects/prop"
                     stem_path = Path(rel_path).with_suffix("").as_posix().lower()
                     all_assets_stems.add(stem_path)
                     asset_map[stem_path] = rel_path
@@ -434,8 +472,6 @@ class UnusedAssetFinder:
 
                 found_refs = future.result()
                 for ref in found_refs:
-                    # Normalize reference to stem for comparison
-                    # e.g. "objects/prop.tif" -> "objects/prop"
                     ref_stem = Path(ref).with_suffix("").as_posix().lower()
                     referenced_stems.add(ref_stem)
 
@@ -445,7 +481,6 @@ class UnusedAssetFinder:
         logging.info("Analyzing usage...")
         for stem in all_assets_stems:
             if stem not in referenced_stems:
-                # If the stem isn't referenced, the file is likely unused
                 unused_assets.append(asset_map[stem])
 
         duration = time.time() - start_time
