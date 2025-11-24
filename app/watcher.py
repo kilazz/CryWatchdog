@@ -31,6 +31,23 @@ def _index_parse_worker(file_path: Path, root_path: Path) -> tuple[str | None, s
     if not Handler:
         return None, set()
 
+    # --- Race Condition Protection ---
+    # When editors save files atomically (write to .tmp -> move to target),
+    # the target file might appear as 0 bytes or be locked for a split second.
+    # We retry up to 5 times (approx 250ms) to ensure we read valid content.
+    for _ in range(5):
+        try:
+            # If file exists and has content, we are good to go
+            if file_path.exists() and file_path.stat().st_size > 0:
+                return rel_path, Handler.parse(file_path)
+        except OSError:
+            # File might be locked by the writing process
+            pass
+
+        time.sleep(0.05)
+
+    # If it's still empty or inaccessible after retries, try parsing anyway
+    # (Handler.parse handles empty files gracefully by returning empty set)
     return rel_path, Handler.parse(file_path)
 
 
@@ -134,9 +151,6 @@ class AssetReferenceIndex:
     def update_asset_path(self, old_abs_path: Path, new_abs_path: Path):
         """Handles a file move/rename by rewriting references in container files."""
         old_rel_path, new_rel_path = self._to_rel_path(old_abs_path), self._to_rel_path(new_abs_path)
-
-        print(f"DEBUG LOGIC: Update requested. Old: '{old_rel_path}', New: '{new_rel_path}'")
-
         if not (old_rel_path and new_rel_path):
             return
 
@@ -177,7 +191,9 @@ class AssetReferenceIndex:
                     affected_containers.update(self.reference_to_containers[v])
 
             if not affected_containers:
-                print(f"DEBUG LOGIC: No references found in index for {old_variants}")
+                logging.debug(
+                    f"Watchdog: No references found for {old_rel_path} (checked variants: {len(old_variants)})"
+                )
                 return
 
             logging.info(
@@ -267,8 +283,7 @@ class WatcherService:
 
         if self.observer:
             self.observer.stop()
-            # We don't join the observer here to prevent GUI freezing,
-            # it will be joined in the thread loop.
+            self.observer.join()
 
     def is_alive(self) -> bool:
         """Checks if the watcher thread is currently running."""
@@ -310,7 +325,8 @@ class WatcherService:
         finally:
             if self.observer and self.observer.is_alive():
                 self.observer.stop()
-                self.observer.join()
+                if self.observer.is_alive():
+                    self.observer.join()
             logging.info("Watcher thread terminated.")
             self.signals.watcherStopped.emit()
 
@@ -328,55 +344,48 @@ class ChangeHandler(FileSystemEventHandler):
         self.tracked_exts = AppConfig.TRACKED_ASSET_EXTENSIONS
 
         # Cache to detect non-atomic moves (Delete + Create)
-        # Key: Filename (str), Value: (Full Path, Timestamp)
         self._last_deleted = {}
 
     def on_created(self, event):
-        print(f"DEBUG: Created {event.src_path}")
         if event.is_directory:
             return
 
         path = Path(event.src_path)
 
-        # --- Check for simulated Move (Delete + Create) ---
+        # --- Simulated Move Detection ---
+        # Check if this filename was deleted very recently
         filename = path.name
         if filename in self._last_deleted:
             old_path, del_time = self._last_deleted[filename]
-            # If the same file was deleted less than 1 second ago
+            # If deleted less than 1 second ago, treat as Move
             if time.time() - del_time < 1.0:
-                print(f"DEBUG: Detected simulated MOVE: {old_path} -> {path}")
+                logging.info(f"Detected move via recreation: {old_path.name}")
 
-                # 1. Update Asset References (The core fix)
+                # 1. Update Asset References (Old -> New)
                 if path.suffix.lower() in self.tracked_exts:
                     self.index.update_asset_path(old_path, path)
 
                 # Cleanup cache
                 del self._last_deleted[filename]
 
-                # If it's a container, we still need to process it below to read ITS new content
-
+        # Process as a new container regardless (to read its content)
         if path.suffix.lower() in self.container_exts:
             self.index.process_container_file(path)
 
     def on_modified(self, event):
-        print(f"DEBUG: Modified {event.src_path}")
         if event.is_directory:
             return
         path = Path(event.src_path)
         if path.suffix.lower() in self.container_exts:
             self.index.process_container_file(path)
-        else:
-            print(f"DEBUG: Ignored modification (extension {path.suffix} not in container list)")
 
     def on_deleted(self, event):
-        print(f"DEBUG: Deleted {event.src_path}")
         if event.is_directory:
             return
 
         path = Path(event.src_path)
 
-        # --- Cache deletion for potential Move detection ---
-        # We store it only if it's a tracked extension or container
+        # --- Cache deletion for Move Detection ---
         if path.suffix.lower() in self.tracked_exts or path.suffix.lower() in self.container_exts:
             self._last_deleted[path.name] = (path, time.time())
 
@@ -384,17 +393,14 @@ class ChangeHandler(FileSystemEventHandler):
             self.index.remove_container_from_index(path)
 
     def on_moved(self, event):
-        print(f"DEBUG: Moved {event.src_path} -> {event.dest_path}")
         src_path, dest_path = Path(event.src_path), Path(event.dest_path)
 
         if event.is_directory:
             self.index.handle_directory_move(src_path, dest_path)
         else:
-            # 1. If it was an asset (Texture/Model), update references to it
             if src_path.suffix.lower() in self.tracked_exts:
                 self.index.update_asset_path(src_path, dest_path)
 
-            # 2. If it was a container (Material/Lua), update its own records
             if src_path.suffix.lower() in self.container_exts:
                 self.index.remove_container_from_index(src_path)
                 self.index.process_container_file(dest_path)
