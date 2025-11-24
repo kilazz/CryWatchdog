@@ -134,6 +134,9 @@ class AssetReferenceIndex:
     def update_asset_path(self, old_abs_path: Path, new_abs_path: Path):
         """Handles a file move/rename by rewriting references in container files."""
         old_rel_path, new_rel_path = self._to_rel_path(old_abs_path), self._to_rel_path(new_abs_path)
+
+        print(f"DEBUG LOGIC: Update requested. Old: '{old_rel_path}', New: '{new_rel_path}'")
+
         if not (old_rel_path and new_rel_path):
             return
 
@@ -174,6 +177,7 @@ class AssetReferenceIndex:
                     affected_containers.update(self.reference_to_containers[v])
 
             if not affected_containers:
+                print(f"DEBUG LOGIC: No references found in index for {old_variants}")
                 return
 
             logging.info(
@@ -312,7 +316,10 @@ class WatcherService:
 
 
 class ChangeHandler(FileSystemEventHandler):
-    """Responds to file system events and triggers updates in the AssetReferenceIndex."""
+    """
+    Responds to file system events and triggers updates in the AssetReferenceIndex.
+    Includes logic to detect 'Move' operations masquerading as 'Delete -> Create'.
+    """
 
     def __init__(self, index: AssetReferenceIndex):
         super().__init__()
@@ -320,28 +327,64 @@ class ChangeHandler(FileSystemEventHandler):
         self.container_exts = tuple(ASSET_HANDLERS.keys())
         self.tracked_exts = AppConfig.TRACKED_ASSET_EXTENSIONS
 
+        # Cache to detect non-atomic moves (Delete + Create)
+        # Key: Filename (str), Value: (Full Path, Timestamp)
+        self._last_deleted = {}
+
     def on_created(self, event):
+        print(f"DEBUG: Created {event.src_path}")
         if event.is_directory:
             return
+
         path = Path(event.src_path)
+
+        # --- Check for simulated Move (Delete + Create) ---
+        filename = path.name
+        if filename in self._last_deleted:
+            old_path, del_time = self._last_deleted[filename]
+            # If the same file was deleted less than 1 second ago
+            if time.time() - del_time < 1.0:
+                print(f"DEBUG: Detected simulated MOVE: {old_path} -> {path}")
+
+                # 1. Update Asset References (The core fix)
+                if path.suffix.lower() in self.tracked_exts:
+                    self.index.update_asset_path(old_path, path)
+
+                # Cleanup cache
+                del self._last_deleted[filename]
+
+                # If it's a container, we still need to process it below to read ITS new content
+
         if path.suffix.lower() in self.container_exts:
             self.index.process_container_file(path)
 
     def on_modified(self, event):
+        print(f"DEBUG: Modified {event.src_path}")
         if event.is_directory:
             return
         path = Path(event.src_path)
         if path.suffix.lower() in self.container_exts:
             self.index.process_container_file(path)
+        else:
+            print(f"DEBUG: Ignored modification (extension {path.suffix} not in container list)")
 
     def on_deleted(self, event):
+        print(f"DEBUG: Deleted {event.src_path}")
         if event.is_directory:
             return
+
         path = Path(event.src_path)
+
+        # --- Cache deletion for potential Move detection ---
+        # We store it only if it's a tracked extension or container
+        if path.suffix.lower() in self.tracked_exts or path.suffix.lower() in self.container_exts:
+            self._last_deleted[path.name] = (path, time.time())
+
         if path.suffix.lower() in self.container_exts:
             self.index.remove_container_from_index(path)
 
     def on_moved(self, event):
+        print(f"DEBUG: Moved {event.src_path} -> {event.dest_path}")
         src_path, dest_path = Path(event.src_path), Path(event.dest_path)
 
         if event.is_directory:
