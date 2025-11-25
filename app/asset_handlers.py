@@ -41,25 +41,24 @@ class XmlAssetHandler(AssetHandler):
     def parse(file_path: Path) -> set[str]:
         """Parses file using memory mapping (zero-copy reading)."""
         found_paths = set()
-        try:
-            if file_path.stat().st_size == 0:
-                return set()
 
-            # FIXED: SIM117 - Combined context managers
-            with (
-                open(file_path, "rb") as f,
-                mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm,
-            ):
-                for match in XmlAssetHandler._BYTES_REGEX.finditer(mm):
-                    try:
-                        # Decode only the matched path
-                        path_str = match.group(1).decode("utf-8", errors="ignore")
-                        found_paths.add(path_str.strip().replace(os.path.sep, "/"))
-                    except Exception:
-                        continue
-        except OSError as e:
-            logging.warning(f"Could not read file {file_path}: {e}")
+        if file_path.stat().st_size == 0:
             return set()
+
+        # We intentionally do NOT catch OSError here anymore.
+        # If the file is locked/busy, let the error bubble up so the
+        # caller (watcher.py) can catch it and retry the operation.
+        with (
+            open(file_path, "rb") as f,
+            mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm,
+        ):
+            for match in XmlAssetHandler._BYTES_REGEX.finditer(mm):
+                try:
+                    # Decode only the matched path
+                    path_str = match.group(1).decode("utf-8", errors="ignore")
+                    found_paths.add(path_str.strip().replace(os.path.sep, "/"))
+                except Exception:
+                    continue
 
         return {p.lower() for p in found_paths}
 
@@ -70,7 +69,7 @@ class XmlAssetHandler(AssetHandler):
         This preserves custom formatting, comments, and structure better than XML parsers.
         """
         try:
-            # Read as text for replacement (cannot write via mmap safely with length change)
+            # Read as text for replacement
             content = file_path.read_text(encoding="utf-8", errors="ignore")
             original_content = content
 
@@ -128,23 +127,19 @@ class LuaAssetHandler(AssetHandler):
 
     @staticmethod
     def parse(file_path: Path) -> set[str]:
-        try:
-            if file_path.stat().st_size == 0:
-                return set()
-            found = set()
-
-            # FIXED: SIM117 - Combined context managers
-            with (
-                open(file_path, "rb") as f,
-                mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm,
-            ):
-                for m in LuaAssetHandler._BYTES_REGEX.finditer(mm):
-                    path_str = m.group(2).decode("utf-8", errors="ignore")
-                    found.add(path_str.strip().replace(os.path.sep, "/").lower())
-            return found
-        except Exception as e:
-            logging.error(f"Failed to parse LUA {file_path.name}: {e}")
+        if file_path.stat().st_size == 0:
             return set()
+        found = set()
+
+        # FIX: Let OSError bubble up for retry logic
+        with (
+            open(file_path, "rb") as f,
+            mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm,
+        ):
+            for m in LuaAssetHandler._BYTES_REGEX.finditer(mm):
+                path_str = m.group(2).decode("utf-8", errors="ignore")
+                found.add(path_str.strip().replace(os.path.sep, "/").lower())
+        return found
 
     @staticmethod
     def rewrite(file_path: Path, replacements: dict[str, str], is_dir_move: bool):
