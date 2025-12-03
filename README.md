@@ -2,8 +2,6 @@
 
 **CryWatchdog** is a comprehensive utility designed for technical art pipelines, specifically tailored to maintain the integrity of game projects CryEngine. It automates routine file management tasks, preventing broken references and the accumulation of "garbage" assets during development.
 
-## 🚀 Key Features
-
 ### 👁️ Real-time Reference Patcher (Watchdog)
 *   **Live Monitoring:** Automatically detects when files (textures, models, scripts) are renamed or moved within the project directory.
 *   **Instant Updates:** Immediately patches references inside `.mtl`, `.xml`, `.lua`, and other container files to match the new file paths.
