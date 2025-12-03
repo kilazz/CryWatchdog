@@ -1,4 +1,5 @@
 # app/utils.py
+import contextlib
 import html
 import logging
 import os
@@ -67,6 +68,7 @@ def ensure_writable(file_path: Path):
     # 1. Try Perforce (P4) checkout
     try:
         # Check if 'p4' is available and file is tracked
+        # Only run if inside a typical dev environment to avoid spamming subprocesses
         proc = subprocess.run(
             ["p4", "edit", str(file_path)],
             capture_output=True,
@@ -90,10 +92,14 @@ def ensure_writable(file_path: Path):
 def atomic_write(file_path: Path, data: Any, **kwargs: Any):
     """
     Writes data to a temp file, ensures the target is writable, then replaces it.
-    Uses standard 'open()' instead of 'write_text' to ensure the 'newline'
-    parameter is correctly applied on all Python versions/platforms.
+
+    Includes Process ID (PID) in the temp filename to allow multiple instances
+    of the tool to run safely on the same folder without collision.
     """
-    temp_path = file_path.with_suffix(file_path.suffix + ".tmp")
+    # Create a unique temp file name: filename.ext.<PID>.tmp
+    pid = os.getpid()
+    temp_path = file_path.with_suffix(f"{file_path.suffix}.{pid}.tmp")
+
     try:
         # Prepare temp file
         if isinstance(data, str):
@@ -123,7 +129,8 @@ def atomic_write(file_path: Path, data: Any, **kwargs: Any):
         logging.error(f"Atomic write to {file_path} failed: {e}")
         # Clean up temp file on failure
         if temp_path.exists():
-            temp_path.unlink(missing_ok=True)
+            with contextlib.suppress(OSError):
+                temp_path.unlink(missing_ok=True)
         raise
 
 
@@ -160,6 +167,11 @@ class QtLogHandler(logging.Handler):
             logging.ERROR: f"color: {UIConfig.COLOR_ERROR};",
             logging.CRITICAL: f"color: {UIConfig.COLOR_ERROR}; font-weight: bold;",
         }
+
+        # Check if this is a "Dry Run" message (convention from watcher.py)
         style = level_map.get(record.levelno, "color: white;")
+        if "[DRY RUN]" in record.getMessage():
+            style = f"color: {UIConfig.COLOR_DRY_RUN}; font-weight: bold;"
+
         formatted_message = html.escape(self.format(record))
         self.signals.log.emit(f'<span style="{style}">{formatted_message}</span>')

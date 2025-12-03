@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from app.config import AppConfig, AppState, UIConfig
 from app.tasks import (
+    MissingAssetFinder,
     ProjectAnalyzer,
     ProjectCleaner,
     ProjectConverter,
@@ -33,6 +34,7 @@ from app.ui_dialogs import (
     AnalysisReportDialog,
     CleanerDialog,
     LuaToolkitDialog,
+    MissingAssetsDialog,
     PackerDialog,
     UnusedAssetsDialog,
 )
@@ -96,7 +98,8 @@ class MainWindow(QMainWindow):
 
         project_tools_menu = QMenu(self)
         self.analyze_action = project_tools_menu.addAction("Analyze Project Files...")
-        self.unused_action = project_tools_menu.addAction("Find Unused Assets (Scavenger)...")  # NEW
+        self.unused_action = project_tools_menu.addAction("Find Unused Assets (Scavenger)...")
+        self.missing_action = project_tools_menu.addAction("Check for Missing Textures/Assets...")
         project_tools_menu.addSeparator()
         self.lua_action = project_tools_menu.addAction("Lua Tools...")
         self.clean_action = project_tools_menu.addAction("Clean & Normalize Assets...")
@@ -135,11 +138,17 @@ class MainWindow(QMainWindow):
             ("match_any_texture_extension", "Match Any Texture Extension (tif/dds)", True),
             ("allow_ext_change", "Patch on Extension Changes", True),
             ("allow_dir_change", "Patch on Directory Renames", True),
+            ("dry_run", "Dry Run (Simulation Mode - No Writes)", False),
             ("show_detailed_log", "Enable Debug Log (Python)", False),
         ]
         for name, text, default in opts:
             self.watcher_options[name] = QCheckBox(text)
             self.watcher_options[name].setChecked(default)
+
+            # Highlight Dry Run to make it obvious
+            if name == "dry_run":
+                self.watcher_options[name].setStyleSheet(f"color: {UIConfig.COLOR_DRY_RUN}; font-weight: bold;")
+
             options_layout.addWidget(self.watcher_options[name])
 
         self.toggle_button = QPushButton("Start Watchdog")
@@ -163,7 +172,8 @@ class MainWindow(QMainWindow):
         # Actions
         self.clean_action.triggered.connect(self._open_cleaner_dialog)
         self.analyze_action.triggered.connect(self._analyze_project)
-        self.unused_action.triggered.connect(self._run_unused_finder)  # NEW CONNECTION
+        self.unused_action.triggered.connect(self._run_unused_finder)
+        self.missing_action.triggered.connect(self._run_missing_finder)
         self.lc_action.triggered.connect(self._run_lc_conversion)
         self.packer_action.triggered.connect(self._open_packer_dialog)
         self.lua_action.triggered.connect(self._open_lua_dialog)
@@ -260,6 +270,10 @@ class MainWindow(QMainWindow):
         if not self.project_root:
             return
         opts = {name: widget.isChecked() for name, widget in self.watcher_options.items()}
+
+        if opts.get("dry_run"):
+            logging.warning("Watchdog starting in DRY RUN mode. No files will be modified.")
+
         service_settings = {"project_root": self.project_root, "watcher_options": opts}
         self.watcher_service = WatcherService(service_settings, self.core_signals)
         self.watcher_service.start()
@@ -300,6 +314,15 @@ class MainWindow(QMainWindow):
                 return UnusedAssetFinder(self.project_root, self.core_signals).run()
 
             self.run_task_in_thread(task, on_complete=self.on_unused_scan_complete)
+
+    def _run_missing_finder(self):
+        """Runs the missing asset/broken reference scanner."""
+        if self.can_run_task():
+
+            def task():
+                return MissingAssetFinder(self.project_root, self.core_signals).run()
+
+            self.run_task_in_thread(task, on_complete=self.on_missing_scan_complete)
 
     def _open_packer_dialog(self):
         """Opens the packer/unpacker tool dialog."""
@@ -391,6 +414,12 @@ class MainWindow(QMainWindow):
         """Callback for the unused asset finder task."""
         if results:
             UnusedAssetsDialog(self, results).exec()
+
+    @Slot(object)
+    def on_missing_scan_complete(self, results: dict | None):
+        """Callback for the missing asset finder task."""
+        if results:
+            MissingAssetsDialog(self, results).exec()
 
     def can_run_task(self, silent: bool = False) -> bool:
         """Checks if the application is in a state that allows a new task to run."""

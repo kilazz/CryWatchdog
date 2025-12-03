@@ -5,7 +5,7 @@ import re
 import subprocess
 import sys
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -19,7 +19,9 @@ from app.utils import CoreSignals, atomic_write, find_files_by_extensions
 def _cleaner_process_file_worker(file_path: Path, options: dict) -> tuple[CleanupStatus, str]:
     """
     Worker function for the project cleaner.
-    FIXED: Now compares bytes to ensure 'Modified' is only returned if actual changes occur.
+
+    Optimized to assume UTF-8 first (speed), falling back to chardet (accuracy)
+    only if decoding fails.
     """
     try:
         # 1. Read raw bytes
@@ -27,12 +29,16 @@ def _cleaner_process_file_worker(file_path: Path, options: dict) -> tuple[Cleanu
         if not original_bytes:
             return CleanupStatus.SKIPPED, "File is empty"
 
-        # 2. Detect encoding
-        detected = chardet.detect(original_bytes)
-        encoding = detected["encoding"] or "utf-8"
+        # 2. Detect encoding (Optimistic approach)
+        # Try UTF-8 first (covers 95%+ of modern assets), fall back to chardet only on error.
+        encoding = "utf-8"
+        try:
+            original_text = original_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            detected = chardet.detect(original_bytes)
+            encoding = detected["encoding"] or "utf-8"
+            original_text = original_bytes.decode(encoding, errors="replace")
 
-        # 3. Decode to text
-        original_text = original_bytes.decode(encoding, errors="replace")
         processed_text = original_text
         actions = []
 
@@ -96,7 +102,7 @@ def _cleaner_process_file_worker(file_path: Path, options: dict) -> tuple[Cleanu
 
             processed_text = trimmed_text
 
-        # --- Step B: Encoding & Line Endings (The Fix) ---
+        # --- Step B: Encoding & Line Endings ---
 
         final_encoding = encoding
         final_newline = None
@@ -492,4 +498,87 @@ class UnusedAssetFinder:
             "unused_files": sorted(unused_assets),
             "total_assets": len(all_assets_stems),
             "duration": duration,
+        }
+
+
+class MissingAssetFinder:
+    """
+    Task to find 'Broken References' - files referenced in materials/scripts
+    that do not exist on the disk.
+    """
+
+    def __init__(self, project_root: Path, signals: CoreSignals):
+        self.project_root = project_root
+        self.signals = signals
+
+    def run(self) -> dict:
+        logging.info("=" * 30 + "\n🔍 Starting Broken Reference Scan...")
+        start_time = time.time()
+
+        # 1. Identify container files (files that can contain references)
+        container_exts = tuple(ASSET_HANDLERS.keys())
+        container_files = find_files_by_extensions(self.project_root, container_exts)
+
+        if not container_files:
+            return {"summary": "No container files found to scan.", "missing_map": {}}
+
+        # 2. Parse files in parallel to find all references
+        # Structure: { "missing/path/texture.dds": ["found_in_mat.mtl", "found_in_level.lyr"] }
+        missing_map = defaultdict(list)
+
+        # We cache file existence checks to avoid hitting OS too often for common assets
+        # (e.g. strict_check_cache["textures/default.dds"] = True)
+        existence_cache = {}
+
+        logging.info(f"Scanning {len(container_files)} files for broken links...")
+
+        with ProcessPoolExecutor(max_workers=os.cpu_count() or 1) as executor:
+            # We assume _finder_parse_wrapper is already defined in tasks.py (from UnusedAssetFinder)
+            future_map = {executor.submit(_finder_parse_wrapper, f): f for f in container_files}
+
+            for i, future in enumerate(as_completed(future_map), 1):
+                self.signals.progressUpdated.emit(i, len(container_files))
+                container_path = future_map[future]
+
+                try:
+                    referenced_paths = future.result()
+                except Exception as e:
+                    logging.warning(f"Failed to parse {container_path.name}: {e}")
+                    continue
+
+                container_rel = container_path.relative_to(self.project_root).as_posix()
+
+                for ref in referenced_paths:
+                    # Logic: Refs are strictly checked relative to project root
+                    # Some engines allow referencing "tex.tif" while using "tex.dds".
+                    # We check exact match first, then try common variants if needed.
+
+                    if ref in existence_cache:
+                        exists = existence_cache[ref]
+                    else:
+                        full_path = self.project_root / ref
+                        exists = full_path.exists()
+
+                        # Fuzzy check: If .tif referenced, check if .dds exists (GameDev specific)
+                        if not exists and ref.endswith((".tif", ".tiff", ".png", ".tga")):
+                            dds_ref = Path(ref).with_suffix(".dds").as_posix()
+                            if (self.project_root / dds_ref).exists():
+                                exists = True  # Considered valid because engine compiles it
+
+                        existence_cache[ref] = exists
+
+                    if not exists:
+                        missing_map[ref].append(container_rel)
+
+        duration = time.time() - start_time
+        missing_count = len(missing_map)
+        summary = f"Scan Complete. Found {missing_count} missing assets referenced in project."
+
+        logging.info(f"✅ {summary}")
+
+        return {
+            "summary": summary,
+            "missing_map": dict(missing_map),  # Convert back to dict for pickle/Qt safety
+            "duration": duration,
+            "total_scanned": len(container_files),
         }

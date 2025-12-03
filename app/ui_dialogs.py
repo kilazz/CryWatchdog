@@ -2,6 +2,7 @@
 import contextlib
 import sys
 import time
+from collections import defaultdict
 from pathlib import Path
 from typing import ClassVar
 
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTreeWidget,
     QTreeWidgetItem,
+    QTreeWidgetItemIterator,
     QVBoxLayout,
     QWidget,
 )
@@ -288,6 +290,145 @@ class UnusedAssetsDialog(QDialog):
         )
         QApplication.clipboard().setText(text)
         QMessageBox.information(self, "Copied", f"{self.list_widget.topLevelItemCount()} paths copied to clipboard.")
+
+
+class MissingAssetsDialog(QDialog):
+    """
+    Dialog to display Broken/Missing references found by MissingAssetFinder.
+    Allows sorting/grouping by file extension.
+    """
+
+    def __init__(self, parent, results: dict):
+        super().__init__(parent)
+        self.results = results
+        self.missing_map = results.get("missing_map", {})
+
+        self.setWindowTitle(f"Missing Assets Report (Time: {results['duration']:.2f}s)")
+        self.resize(800, 600)
+
+        layout = QVBoxLayout(self)
+
+        # --- Info Header ---
+        info_layout = QHBoxLayout()
+
+        # Stats
+        count = len(self.missing_map)
+        header_color = UIConfig.COLOR_ERROR if count > 0 else UIConfig.COLOR_SUCCESS
+        status_label = QLabel(f"Broken References: {count}")
+        status_label.setStyleSheet(f"color: {header_color}; font-weight: bold; font-size: 14px;")
+
+        info_label = QLabel(f"(Scanned {results['total_scanned']} files)")
+
+        info_layout.addWidget(status_label)
+        info_layout.addWidget(info_label)
+        info_layout.addStretch()
+
+        # Grouping Checkbox
+        self.group_cb = QCheckBox("Group by File Extension")
+        self.group_cb.toggled.connect(self._populate_tree)
+        info_layout.addWidget(self.group_cb)
+
+        layout.addLayout(info_layout)
+
+        # --- Tree Widget ---
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["Missing Asset / Group / Reference", "Count / Ext"])
+        self.tree.setColumnWidth(0, 500)
+        self.tree.setFont(UIConfig.FONT_MONOSPACE)
+        self.tree.setSortingEnabled(True)
+
+        layout.addWidget(self.tree)
+
+        # --- Buttons ---
+        btn_box = QHBoxLayout()
+        copy_btn = QPushButton("Copy Report to Clipboard")
+        copy_btn.clicked.connect(self._copy_to_clipboard)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+
+        btn_box.addWidget(copy_btn)
+        btn_box.addStretch()
+        btn_box.addWidget(close_btn)
+        layout.addLayout(btn_box)
+
+        # Initial Population
+        self._populate_tree(False)
+
+    def _populate_tree(self, group_by_ext: bool):
+        """Refreshes the tree view based on the grouping mode."""
+        self.tree.clear()
+        self.tree.setSortingEnabled(False)  # Disable during insert for speed
+
+        if group_by_ext:
+            # Group Logic: Extension -> List of Files
+            groups = defaultdict(list)
+            for path, containers in self.missing_map.items():
+                ext = Path(path).suffix.lower() or "No Extension"
+                groups[ext].append((path, containers))
+
+            for ext, items in sorted(groups.items()):
+                # Group Header
+                group_item = QTreeWidgetItem([f"[{ext.upper()}]", f"{len(items)} files"])
+                group_item.setForeground(0, QColor(UIConfig.COLOR_INFO))
+                group_item.setFont(0, UIConfig.FONT_MONOSPACE)
+
+                for path, containers in sorted(items, key=lambda x: len(x[1]), reverse=True):
+                    self._add_file_item(group_item, path, containers)
+
+                self.tree.addTopLevelItem(group_item)
+
+            self.tree.expandAll()
+
+        else:
+            # Flat Logic: Sort by criticality (number of refs)
+            sorted_items = sorted(self.missing_map.items(), key=lambda item: len(item[1]), reverse=True)
+            for missing_path, containers in sorted_items:
+                self._add_file_item(self.tree, missing_path, containers)
+
+        self.tree.setSortingEnabled(True)
+
+    def _add_file_item(self, parent, path, containers):
+        """Helper to create a file item and its reference children."""
+        ext = Path(path).suffix.lower()
+
+        # The Missing File Item
+        if isinstance(parent, QTreeWidget):
+            item = QTreeWidgetItem([path, ext])
+            parent.addTopLevelItem(item)
+        else:
+            item = QTreeWidgetItem([path, f"{len(containers)} refs"])
+            parent.addChild(item)
+
+        item.setForeground(0, QColor(UIConfig.COLOR_ERROR))
+
+        # The Containers (where it is referenced)
+        for container in containers:
+            child = QTreeWidgetItem([f"↳ {container}", ""])
+            child.setForeground(0, QColor("gray"))
+            item.addChild(child)
+
+    def _copy_to_clipboard(self):
+        if self.tree.topLevelItemCount() == 0:
+            return
+
+        lines = []
+        iterator = QTreeWidgetItemIterator(self.tree)
+        while iterator.value():
+            item = iterator.value()
+
+            # Simple indentation logic for clipboard text
+            indent_level = 0
+            curr = item.parent()
+            while curr:
+                indent_level += 1
+                curr = curr.parent()
+
+            indent = "\t" * indent_level
+            lines.append(f"{indent}{item.text(0)}")
+            iterator += 1
+
+        QApplication.clipboard().setText("\n".join(lines))
+        QMessageBox.information(self, "Copied", "Report copied to clipboard.")
 
 
 class PackerDialog(QDialog):

@@ -31,7 +31,7 @@ def _index_parse_worker(file_path: Path, root_path: Path) -> tuple[str | None, s
     if not Handler:
         return None, None
 
-    # Retry logic for locked files
+    # Retry logic for locked files (common in Game Engines)
     for _ in range(10):
         try:
             if file_path.exists() and file_path.stat().st_size > 0:
@@ -48,15 +48,20 @@ def _index_parse_worker(file_path: Path, root_path: Path) -> tuple[str | None, s
 class AssetReferenceIndex:
     """
     In-memory bidirectional index of asset references.
+    Handles the logic for deciding which files need to be updated.
     """
 
     def __init__(self, root_path: Path, signals: CoreSignals, **kwargs: bool):
         self.root_path = root_path
         self.signals = signals
 
+        # Configuration options
         self.allow_extension_change = kwargs.get("allow_ext_change", True)
         self.allow_directory_change = kwargs.get("allow_dir_change", True)
         self.match_any_texture_extension = kwargs.get("match_any_texture_extension", True)
+
+        # New Flag: Dry Run Mode
+        self.dry_run = kwargs.get("dry_run", False)
 
         self._lock = threading.Lock()
         self._write_cooldowns = {}
@@ -196,12 +201,18 @@ class AssetReferenceIndex:
                 Handler = ASSET_HANDLERS.get(Path(rel_path_str).suffix.lower())
                 if Handler:
                     full_path = self.root_path / rel_path_str
-                    Handler.rewrite(full_path, replacements, is_dir_move=False)
 
-                    # Set Cooldown (2 seconds)
-                    self._write_cooldowns[full_path] = time.time() + 2.0
+                    if self.dry_run:
+                        # [DRY RUN] Simulation Logic
+                        logging.info(f"  [DRY RUN] Would patch: {rel_path_str}")
+                    else:
+                        # Actual Logic
+                        Handler.rewrite(full_path, replacements, is_dir_move=False)
+                        # Set Cooldown (2 seconds) to prevent infinite loops
+                        self._write_cooldowns[full_path] = time.time() + 2.0
 
             # Update In-Memory Index (TRUSTED)
+            # We do this even in Dry Run so the tool remains consistent in memory until restart
             for old_v in old_variants:
                 if old_v in self.reference_to_containers:
                     containers_to_move = self.reference_to_containers.pop(old_v)
@@ -239,9 +250,16 @@ class AssetReferenceIndex:
                 Handler = ASSET_HANDLERS.get(Path(rel_path_str).suffix.lower())
                 if Handler:
                     full_path = self.root_path / rel_path_str
-                    Handler.rewrite(full_path, replacements, is_dir_move=True)
-                    self._write_cooldowns[full_path] = time.time() + 2.0
 
+                    if self.dry_run:
+                        # [DRY RUN] Simulation Logic
+                        logging.info(f"  [DRY RUN] Would patch (Dir Move): {rel_path_str}")
+                    else:
+                        # Actual Logic
+                        Handler.rewrite(full_path, replacements, is_dir_move=True)
+                        self._write_cooldowns[full_path] = time.time() + 2.0
+
+        # Re-index because many files might have moved location
         self.signals.indexingStarted.emit()
         self.build_index()
         self.signals.indexingFinished.emit()
@@ -276,9 +294,11 @@ class WatcherService:
         self.observer = Observer()
         try:
             self.signals.indexingStarted.emit()
-            index = AssetReferenceIndex(
-                self.settings["project_root"], self.signals, **self.settings.get("watcher_options", {})
-            )
+
+            # Extract options and initialize Index
+            options = self.settings.get("watcher_options", {})
+            index = AssetReferenceIndex(self.settings["project_root"], self.signals, **options)
+
             index.build_index()
             if self.stop_event.is_set():
                 return
@@ -287,7 +307,9 @@ class WatcherService:
             event_handler = ChangeHandler(index)
             self.observer.schedule(event_handler, str(self.settings["project_root"]), recursive=True)
 
-            logging.info(f"Watchdog started on: {self.settings['project_root']}")
+            mode_str = "[DRY RUN ENABLED]" if options.get("dry_run") else "[LIVE MODE]"
+            logging.info(f"Watchdog started on: {self.settings['project_root']} {mode_str}")
+
             self.observer.start()
             while not self.stop_event.is_set():
                 time.sleep(0.5)
@@ -317,7 +339,7 @@ class ChangeHandler(FileSystemEventHandler):
         path = Path(event.src_path)
         filename = path.name
 
-        # Simulated Move Detection
+        # Simulated Move Detection (Delete + Create)
         if filename in self._last_deleted:
             old_path, del_time = self._last_deleted[filename]
             if time.time() - del_time < 1.0:
