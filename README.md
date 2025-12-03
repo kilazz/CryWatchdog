@@ -1,6 +1,6 @@
 # AssetWatchdog
 
-**AssetWatchdog** is a comprehensive utility designed for technical art pipelines, specifically tailored to maintain the integrity of game projects (CryEngine / Lumberyard / O3DE). It automates routine file management tasks, preventing broken references and the accumulation of "garbage" assets during development.
+**AssetWatchdog** is a comprehensive utility designed for technical art pipelines, specifically tailored to maintain the integrity of game projects CryEngine. It automates routine file management tasks, preventing broken references and the accumulation of "garbage" assets during development.
 
 ## 🚀 Key Features
 
