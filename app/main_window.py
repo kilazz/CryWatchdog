@@ -65,7 +65,7 @@ class MainWindow(QMainWindow):
 
     def _setup_window(self):
         """Initializes main window properties."""
-        self.setWindowTitle("AssetWatchdog")
+        self.setWindowTitle("CryWatchdog")
         self.setGeometry(100, 100, 1100, 700)
 
     def get_int_validator(self):
