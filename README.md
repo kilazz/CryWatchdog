@@ -18,7 +18,7 @@
 *   **Standardization:** Normalizes text encoding (UTF-8), line endings, and path separators (forward slashes), and removes BOM headers.
 
 ## 🛠️ Tech Stack
-*   **Python 3.10+**
+*   **Python 3.13**
 *   **PySide6 (Qt)** for the GUI
 *   **Watchdog** for filesystem events
 *   **Multithreading** (QThreadPool/ProcessPoolExecutor) for non-blocking UI
