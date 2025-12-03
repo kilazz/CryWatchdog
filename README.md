@@ -15,11 +15,6 @@
 *   **Unused Asset Scavenger:** Identifies "orphaned" files that exist on the disk but are not referenced by any level, material, or script, helping to reduce project size.
 *   **Lua Toolkit:** Provides syntax validation, encoding checks, and auto-formatting (via `StyLua`) for Lua scripts.
 
-### 🛡️ Safety First
-*   **Dry Run Mode:** A simulation mode that logs intended changes without modifying files, allowing for safe previewing of operations.
-*   **Atomic Writes & P4 Support:** Ensures data integrity using atomic file writes. Includes built-in support for **Perforce (P4)** (auto-checkout) and handles Read-Only file attributes.
-*   **Smart Parsing:** Utilizes memory mapping (`mmap`) for high-performance reading of large asset libraries.
-
 ### 🧹 Normalization Tools
 *   **Batch Lowercase Conversion:** Enforces naming conventions by converting filenames and folders to lowercase.
 *   **Standardization:** Normalizes text encoding (UTF-8), line endings, and path separators (forward slashes), and removes BOM headers.
