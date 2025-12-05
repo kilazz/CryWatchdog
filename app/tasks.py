@@ -505,6 +505,7 @@ class MissingAssetFinder:
     """
     Task to find 'Broken References' - files referenced in materials/scripts
     that do not exist on the disk.
+    Includes smart logic to handle virtual path duplication (e.g. EngineAssets/EngineAssets).
     """
 
     def __init__(self, project_root: Path, signals: CoreSignals):
@@ -533,7 +534,6 @@ class MissingAssetFinder:
         logging.info(f"Scanning {len(container_files)} files for broken links...")
 
         with ProcessPoolExecutor(max_workers=os.cpu_count() or 1) as executor:
-            # We assume _finder_parse_wrapper is already defined in tasks.py (from UnusedAssetFinder)
             future_map = {executor.submit(_finder_parse_wrapper, f): f for f in container_files}
 
             for i, future in enumerate(as_completed(future_map), 1):
@@ -549,22 +549,39 @@ class MissingAssetFinder:
                 container_rel = container_path.relative_to(self.project_root).as_posix()
 
                 for ref in referenced_paths:
-                    # Logic: Refs are strictly checked relative to project root
-                    # Some engines allow referencing "tex.tif" while using "tex.dds".
-                    # We check exact match first, then try common variants if needed.
+                    # Logic: Refs are strictly checked relative to project root.
 
                     if ref in existence_cache:
                         exists = existence_cache[ref]
                     else:
-                        full_path = self.project_root / ref
-                        exists = full_path.exists()
+                        # Prepare candidates to check.
+                        # 1. Exact path
+                        candidates = [ref]
 
-                        # Fuzzy check: If .tif referenced, check if .dds exists (GameDev specific)
-                        if not exists and ref.endswith((".tif", ".tiff", ".png", ".tga")):
-                            dds_ref = Path(ref).with_suffix(".dds").as_posix()
-                            if (self.project_root / dds_ref).exists():
-                                exists = True  # Considered valid because engine compiles it
+                        # 2. Smart Deduplication candidate:
+                        # If project root is "EngineAssets" and ref is "EngineAssets/Textures/...",
+                        # also check "Textures/..."
+                        ref_parts = Path(ref).parts
+                        if len(ref_parts) > 1 and ref_parts[0].lower() == self.project_root.name.lower():
+                            candidates.append(Path(*ref_parts[1:]).as_posix())
 
+                        exists = False
+
+                        # Check all candidates
+                        for candidate in candidates:
+                            # Direct check
+                            if (self.project_root / candidate).exists():
+                                exists = True
+                                break
+
+                            # Fuzzy Check: If .tif referenced, check if .dds exists
+                            if candidate.lower().endswith((".tif", ".tiff", ".png", ".tga")):
+                                dds_candidate = Path(candidate).with_suffix(".dds").as_posix()
+                                if (self.project_root / dds_candidate).exists():
+                                    exists = True
+                                    break
+
+                        # Cache the result for the original reference string
                         existence_cache[ref] = exists
 
                     if not exists:
@@ -578,7 +595,7 @@ class MissingAssetFinder:
 
         return {
             "summary": summary,
-            "missing_map": dict(missing_map),  # Convert back to dict for pickle/Qt safety
+            "missing_map": dict(missing_map),
             "duration": duration,
             "total_scanned": len(container_files),
         }
