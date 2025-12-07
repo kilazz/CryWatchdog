@@ -1,6 +1,6 @@
 # CryWatchdog
 
-**CryWatchdog** is a comprehensive utility designed for technical art pipelines, specifically tailored to maintain the integrity of game projects CryEngine
+**CryWatchdog** utility designed for technical art pipelines, specifically tailored to maintain the integrity of game projects CryEngine
 
 ### 👁️ Real-time Reference Patcher (Watchdog)
 *   **Live Monitoring:** Automatically detects when files (textures, models, scripts) are renamed or moved within the project directory.
@@ -21,4 +21,3 @@
 *   **Python 3.13**
 *   **PySide6 (Qt)** for the GUI
 *   **Watchdog** for filesystem events
-*   **Multithreading** (QThreadPool/ProcessPoolExecutor) for non-blocking UI
