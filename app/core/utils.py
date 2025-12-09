@@ -1,55 +1,13 @@
-# app/utils.py
+# app/core/utils.py
 import contextlib
-import html
 import logging
 import os
 import stat
 import subprocess
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from lxml import etree as ET
-from PySide6.QtCore import QObject, QRunnable, Signal, Slot
-
-from app.config import UIConfig
-
-
-class CoreSignals(QObject):
-    """
-    Defines the signals used for communication between worker threads
-    and the main GUI thread.
-    """
-
-    log = Signal(str)
-    indexingStarted = Signal()
-    indexingFinished = Signal()
-    taskFinished = Signal(object)
-    criticalError = Signal(str, str)
-    watcherStopped = Signal()
-    progressUpdated = Signal(int, int)
-
-
-class Worker(QRunnable):
-    """
-    Generic worker thread for running tasks in the background.
-    """
-
-    def __init__(self, fn: Callable, *args: Any, **kwargs: Any):
-        super().__init__()
-        self.fn = fn
-        self.args = args
-        self.kwargs = kwargs
-        self.signals = CoreSignals()
-
-    @Slot()
-    def run(self):
-        try:
-            result = self.fn(*self.args, **self.kwargs)
-            self.signals.taskFinished.emit(result)
-        except Exception as e:
-            logging.error(f"Error in worker thread: {e}", exc_info=True)
-            self.signals.criticalError.emit("Task Error", f"A critical error occurred: {e}")
 
 
 def ensure_writable(file_path: Path):
@@ -144,34 +102,3 @@ def find_files_by_extensions(root_path: Path, extensions: tuple[str, ...]) -> li
         for filename in files
         if filename.lower().endswith(extensions)
     ]
-
-
-class QtLogHandler(logging.Handler):
-    """
-    Custom logging handler that emits a Qt signal for every log record,
-    allowing logs to be displayed in the GUI with HTML formatting.
-    """
-
-    class LogSignals(QObject):
-        log = Signal(str)
-
-    def __init__(self):
-        super().__init__()
-        self.signals = self.LogSignals()
-
-    def emit(self, record):
-        level_map = {
-            logging.DEBUG: "color: gray;",
-            logging.INFO: "color: white;",
-            logging.WARNING: f"color: {UIConfig.COLOR_WARNING};",
-            logging.ERROR: f"color: {UIConfig.COLOR_ERROR};",
-            logging.CRITICAL: f"color: {UIConfig.COLOR_ERROR}; font-weight: bold;",
-        }
-
-        # Check if this is a "Dry Run" message (convention from watcher.py)
-        style = level_map.get(record.levelno, "color: white;")
-        if "[DRY RUN]" in record.getMessage():
-            style = f"color: {UIConfig.COLOR_DRY_RUN}; font-weight: bold;"
-
-        formatted_message = html.escape(self.format(record))
-        self.signals.log.emit(f'<span style="{style}">{formatted_message}</span>')

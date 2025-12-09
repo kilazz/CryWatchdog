@@ -3,8 +3,8 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "AssetWatchdog"
-description = "AssetWatchdog"
+name = "CryWatchdog"
+description = "CryWatchdog"
 version = "1.0.0"
 readme = "README.md"
 requires-python = ">=3.13"

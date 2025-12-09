@@ -1,13 +1,14 @@
 # main.py
 import logging
 import sys
+from multiprocessing import freeze_support
 
 # --- Dependency Checks ---
 try:
     import qdarkstyle
     from PySide6.QtWidgets import QApplication, QMessageBox
 except ImportError as e:
-    # This block handles missing critical libraries gracefully.
+    # Gracefully handle missing dependencies
     missing_lib = str(e).split("'")[-2]
     error_message = (
         f"ERROR: Missing required library '{missing_lib}'.\n\n"
@@ -15,7 +16,7 @@ except ImportError as e:
         "pip install -e ."
     )
     print(error_message, file=sys.stderr)
-    # Attempt to show a GUI message box if possible.
+    # Try to show a GUI message box
     try:
         app = QApplication(sys.argv)
         msg_box = QMessageBox()
@@ -24,33 +25,30 @@ except ImportError as e:
         msg_box.setWindowTitle("Dependency Error")
         msg_box.exec()
     except Exception:
-        pass  # Fallback to console output if GUI fails
+        pass
     sys.exit(1)
 
 # Import application components after dependency check
-from app.main_window import MainWindow
-from app.utils import QtLogHandler
-
-
-def setup_logging(log_handler: QtLogHandler):
-    """
-    Configures the Python logging module to route all log messages
-    to the GUI's log view via the provided QtLogHandler.
-    """
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)-7s - %(message)s",
-        datefmt="%H:%M:%S",
-        handlers=[log_handler],
-        force=True,  # Overwrite any existing root logger configuration
-    )
+from app.core.logging import QtLogHandler, setup_logging
+from app.ui.main_window import MainWindow
 
 
 def main():
     """
-    Initializes and runs the AssetWatchdog application.
-    This is the main entry point.
+    Initializes and runs the CryWatchdog application.
     """
+    # CRITICAL: Fixes recursive process spawning on Windows when using ProcessPoolExecutor/ThreadPoolExecutor
+    # This must be the very first line in main() to prevent the application from spawning infinite copies of itself.
+    freeze_support()
+
+    # Global Exception Hook to catch crashes and log them to file/console
+    # This ensures that "silent crashes" are recorded in logs/debug.log
+    def exception_hook(exctype, value, tb):
+        logging.critical("Uncaught exception", exc_info=(exctype, value, tb))
+        sys.__excepthook__(exctype, value, tb)
+
+    sys.excepthook = exception_hook
+
     app = QApplication(sys.argv)
     app.setStyleSheet(qdarkstyle.load_stylesheet(qt_api="pyside6"))
 
@@ -61,7 +59,7 @@ def main():
     log_handler = QtLogHandler()
     log_handler.signals.log.connect(main_window.append_log)
 
-    # Configure the root logger to use our custom handler
+    # Configure the root logger (File + Console + GUI)
     setup_logging(log_handler)
 
     # Show the main window and start the application event loop

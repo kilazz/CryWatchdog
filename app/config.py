@@ -2,6 +2,7 @@
 import json
 import logging
 import re
+import sys
 from collections import namedtuple
 from enum import Enum, auto
 from pathlib import Path
@@ -16,11 +17,22 @@ class AppConfig:
     Loads settings from 'config.json' if available, otherwise uses defaults.
     """
 
-    # Path to the external configuration file
+    # --- Path Configuration ---
+    # Determine if we are running as a script or a frozen PyInstaller EXE.
+    # If frozen, resources are in sys._MEIPASS. If dev, root is 2 levels up.
+    PROJECT_ROOT = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
+
+    # Path to external tools (luac.exe, stylua.exe)
+    TOOLS_DIR = PROJECT_ROOT / "bin"
+
+    # Path to the external user configuration file (kept next to the main executable/script)
     CONFIG_FILE = Path("config.json")
 
+    # --- Tool Paths ---
+    LUA_COMPILER_PATH = TOOLS_DIR / "luac54.exe"
+    STYLUA_PATH = TOOLS_DIR / "stylua.exe"
+
     # --- Default Constants (Fallback) ---
-    # RUF012: Annotated with ClassVar because they are mutable class attributes
     DEFAULT_TEXTURE_EXTS: ClassVar[set[str]] = {
         ".dds",
         ".tif",
@@ -62,7 +74,6 @@ class AppConfig:
     # --- Mutable Runtime Configurations ---
     # These are loaded from JSON or initialized with defaults.
     TEXTURE_EXTENSIONS: ClassVar[set[str]] = set(DEFAULT_TEXTURE_EXTS)
-    # FIX: Changed list[str] to ClassVar[list[str]]
     TRACKED_ASSET_EXTENSIONS: ClassVar[list[str]] = list(DEFAULT_TRACKED_EXTS)
 
     # --- Static / Hardcoded Configurations ---
@@ -70,8 +81,6 @@ class AppConfig:
     XML_EXTENSIONS: ClassVar[set[str]] = {".mtl", ".xml", ".lay", ".lyr", ".cdf"}
 
     LOG_MAX_BLOCK_COUNT: int = 5000
-    LUA_COMPILER_EXE_NAME: str = "luac54.exe"
-    STYLUO_EXE_NAME: str = "stylua.exe"
     INVALID_PATH_CHARS_RE = re.compile(r"[<>|?*]")
     MAX_CMD_LINE_LENGTH = 8191
 
@@ -105,7 +114,10 @@ class AppConfig:
         """
         Saves the current configuration to config.json.
         """
-        data = {"textures": sorted(list(cls.TEXTURE_EXTENSIONS)), "tracked": cls.TRACKED_ASSET_EXTENSIONS}
+        data = {
+            "textures": sorted(list(cls.TEXTURE_EXTENSIONS)),
+            "tracked": cls.TRACKED_ASSET_EXTENSIONS,
+        }
         try:
             with open(cls.CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4)

@@ -1,4 +1,4 @@
-# app/watcher.py
+# app/services/watcher.py
 import logging
 import os
 import threading
@@ -8,19 +8,17 @@ from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from pathlib import Path
 
-# This uses OS-level events (Windows API / Inotify) for zero-CPU idle usage.
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from app.asset_handlers import ASSET_HANDLERS
 from app.config import AppConfig
-from app.utils import CoreSignals, find_files_by_extensions
+from app.core.utils import find_files_by_extensions
+from app.services.asset_handlers import ASSET_HANDLERS
 
 
 def _index_parse_worker(file_path: Path, root_path: Path) -> tuple[str | None, set[str] | None]:
     """
     Worker function for the index builder.
-    Returns: (relative_path, set_of_refs) OR (relative_path, None) if read failed.
     """
     try:
         rel_path = file_path.relative_to(root_path).as_posix()
@@ -31,7 +29,6 @@ def _index_parse_worker(file_path: Path, root_path: Path) -> tuple[str | None, s
     if not Handler:
         return None, None
 
-    # Retry logic for locked files (common in Game Engines)
     for _ in range(10):
         try:
             if file_path.exists() and file_path.stat().st_size > 0:
@@ -39,49 +36,31 @@ def _index_parse_worker(file_path: Path, root_path: Path) -> tuple[str | None, s
         except (OSError, ValueError):
             pass
         time.sleep(0.05)
-
-    # If still unreadable, return None to signal "keep old data"
-    logging.warning(f"File busy/empty after retries: {rel_path}. Skipping update.")
     return rel_path, None
 
 
 class AssetReferenceIndex:
     """
     In-memory bidirectional index of asset references.
-    Handles the logic for deciding which files need to be updated.
     """
 
-    def __init__(self, root_path: Path, signals: CoreSignals, **kwargs: bool):
+    def __init__(self, root_path: Path, signals, **kwargs: bool):
         self.root_path = root_path
         self.signals = signals
-
-        # Configuration options
-        self.allow_extension_change = kwargs.get("allow_ext_change", True)
-        self.allow_directory_change = kwargs.get("allow_dir_change", True)
-        self.match_any_texture_extension = kwargs.get("match_any_texture_extension", True)
-
-        # New Flag: Dry Run Mode
         self.dry_run = kwargs.get("dry_run", False)
+        self.match_any_texture_extension = kwargs.get("match_any_texture_extension", True)
+        self.allow_dir_change = kwargs.get("allow_dir_change", True)
 
         self._lock = threading.Lock()
         self._write_cooldowns = {}
-
-        self.reference_to_containers: dict[str, set[str]] = defaultdict(set)
-        self.container_to_references: dict[str, set[str]] = defaultdict(set)
-
-    def _to_rel_path(self, abs_path: Path) -> str | None:
-        try:
-            return abs_path.relative_to(self.root_path).as_posix()
-        except ValueError:
-            return None
+        self.reference_to_containers = defaultdict(set)
+        self.container_to_references = defaultdict(set)
 
     def is_on_cooldown(self, abs_path: Path) -> bool:
-        """Check if we should ignore events for this path due to self-triggered writes."""
         return time.time() < self._write_cooldowns.get(abs_path, 0)
 
     def build_index(self):
         logging.info("Building asset reference index...")
-        start_time = time.time()
         container_files = find_files_by_extensions(self.root_path, tuple(ASSET_HANDLERS.keys()))
 
         if not container_files:
@@ -100,24 +79,17 @@ class AssetReferenceIndex:
                 for ref in found_refs:
                     self.reference_to_containers[ref].add(container_rel_path)
 
-        logging.info(
-            f"Index built in {time.time() - start_time:.2f}s. "
-            f"Tracking {len(self.reference_to_containers)} assets across {len(self.container_to_references)} files."
-        )
+        logging.info(f"Index built. Tracking references in {len(self.container_to_references)} files.")
 
     def process_container_file(self, container_abs_path: Path):
-        """Updates the index for a single modified or created container file."""
         if self.is_on_cooldown(container_abs_path):
             return
 
         result = _index_parse_worker(container_abs_path, self.root_path)
-        if not result:
+        if not result or not result[0]:
             return
 
         container_rel_path, found_refs = result
-        if not container_rel_path:
-            return
-
         if found_refs is None:
             return
 
@@ -134,12 +106,11 @@ class AssetReferenceIndex:
                 self.reference_to_containers[ref].add(container_rel_path)
 
     def remove_container_from_index(self, container_abs_path: Path):
-        # Check cooldown here too! Don't delete index if we are just rewriting the file.
         if self.is_on_cooldown(container_abs_path):
             return
-
-        container_rel_path = self._to_rel_path(container_abs_path)
-        if not container_rel_path:
+        try:
+            container_rel_path = container_abs_path.relative_to(self.root_path).as_posix()
+        except ValueError:
             return
 
         with self._lock:
@@ -148,12 +119,12 @@ class AssetReferenceIndex:
                 for ref in old_refs:
                     if self.reference_to_containers.get(ref):
                         self.reference_to_containers[ref].discard(container_rel_path)
-                        if not self.reference_to_containers.get(ref):
-                            del self.reference_to_containers[ref]
 
     def update_asset_path(self, old_abs_path: Path, new_abs_path: Path):
-        old_rel_path, new_rel_path = self._to_rel_path(old_abs_path), self._to_rel_path(new_abs_path)
-        if not (old_rel_path and new_rel_path):
+        try:
+            old_rel_path = old_abs_path.relative_to(self.root_path).as_posix()
+            new_rel_path = new_abs_path.relative_to(self.root_path).as_posix()
+        except ValueError:
             return
 
         replacements = {}
@@ -161,7 +132,6 @@ class AssetReferenceIndex:
         new_variants = set()
 
         is_texture = old_abs_path.suffix.lower() in AppConfig.TEXTURE_EXTENSIONS
-
         if self.match_any_texture_extension and is_texture:
             old_stem = Path(old_rel_path).with_suffix("").as_posix()
             new_stem = Path(new_rel_path).with_suffix("").as_posix()
@@ -190,7 +160,6 @@ class AssetReferenceIndex:
                     affected_containers.update(self.reference_to_containers[v])
 
             if not affected_containers:
-                logging.debug(f"Watchdog: No references found for {old_rel_path}")
                 return
 
             logging.info(
@@ -201,18 +170,13 @@ class AssetReferenceIndex:
                 Handler = ASSET_HANDLERS.get(Path(rel_path_str).suffix.lower())
                 if Handler:
                     full_path = self.root_path / rel_path_str
-
                     if self.dry_run:
-                        # [DRY RUN] Simulation Logic
                         logging.info(f"  [DRY RUN] Would patch: {rel_path_str}")
                     else:
-                        # Actual Logic
                         Handler.rewrite(full_path, replacements, is_dir_move=False)
-                        # Set Cooldown (2 seconds) to prevent infinite loops
                         self._write_cooldowns[full_path] = time.time() + 2.0
 
-            # Update In-Memory Index (TRUSTED)
-            # We do this even in Dry Run so the tool remains consistent in memory until restart
+            # Update In-Memory Index
             for old_v in old_variants:
                 if old_v in self.reference_to_containers:
                     containers_to_move = self.reference_to_containers.pop(old_v)
@@ -225,11 +189,12 @@ class AssetReferenceIndex:
                     self.container_to_references[container].update(new_variants)
 
     def handle_directory_move(self, old_dir_abs: Path, new_dir_abs: Path):
-        if not self.allow_directory_change:
+        if not self.allow_dir_change:
             return
-
-        old_dir_rel, new_dir_rel = self._to_rel_path(old_dir_abs), self._to_rel_path(new_dir_abs)
-        if not (old_dir_rel and new_dir_rel):
+        try:
+            old_dir_rel = old_dir_abs.relative_to(self.root_path).as_posix()
+            new_dir_rel = new_dir_abs.relative_to(self.root_path).as_posix()
+        except ValueError:
             return
 
         with self._lock:
@@ -250,28 +215,75 @@ class AssetReferenceIndex:
                 Handler = ASSET_HANDLERS.get(Path(rel_path_str).suffix.lower())
                 if Handler:
                     full_path = self.root_path / rel_path_str
-
                     if self.dry_run:
-                        # [DRY RUN] Simulation Logic
                         logging.info(f"  [DRY RUN] Would patch (Dir Move): {rel_path_str}")
                     else:
-                        # Actual Logic
                         Handler.rewrite(full_path, replacements, is_dir_move=True)
                         self._write_cooldowns[full_path] = time.time() + 2.0
 
-        # Re-index because many files might have moved location
         self.signals.indexingStarted.emit()
         self.build_index()
         self.signals.indexingFinished.emit()
 
 
+class ChangeHandler(FileSystemEventHandler):
+    def __init__(self, index: AssetReferenceIndex):
+        super().__init__()
+        self.index = index
+        self.container_exts = tuple(ASSET_HANDLERS.keys())
+        self.tracked_exts = AppConfig.TRACKED_ASSET_EXTENSIONS
+        self._last_deleted = {}
+
+    def on_created(self, event):
+        if event.is_directory:
+            return
+        path = Path(event.src_path)
+        if path.name in self._last_deleted:
+            old_path, del_time = self._last_deleted[path.name]
+            if time.time() - del_time < 1.0:
+                logging.info(f"Detected move via recreation: {old_path.name}")
+                if path.suffix.lower() in self.tracked_exts:
+                    self.index.update_asset_path(old_path, path)
+                del self._last_deleted[path.name]
+
+        if path.suffix.lower() in self.container_exts and not self.index.is_on_cooldown(path):
+            self.index.process_container_file(path)
+
+    def on_modified(self, event):
+        if event.is_directory:
+            return
+        path = Path(event.src_path)
+        if path.suffix.lower() in self.container_exts and not self.index.is_on_cooldown(path):
+            self.index.process_container_file(path)
+
+    def on_deleted(self, event):
+        if event.is_directory:
+            return
+        path = Path(event.src_path)
+        if path.suffix.lower() in self.tracked_exts or path.suffix.lower() in self.container_exts:
+            self._last_deleted[path.name] = (path, time.time())
+        if path.suffix.lower() in self.container_exts and not self.index.is_on_cooldown(path):
+            self.index.remove_container_from_index(path)
+
+    def on_moved(self, event):
+        src_path, dest_path = Path(event.src_path), Path(event.dest_path)
+        if event.is_directory:
+            self.index.handle_directory_move(src_path, dest_path)
+        else:
+            if src_path.suffix.lower() in self.tracked_exts:
+                self.index.update_asset_path(src_path, dest_path)
+            if src_path.suffix.lower() in self.container_exts and not self.index.is_on_cooldown(dest_path):
+                self.index.remove_container_from_index(src_path)
+                self.index.process_container_file(dest_path)
+
+
 class WatcherService:
-    def __init__(self, settings: dict, signals: CoreSignals):
+    def __init__(self, settings: dict, signals):
         self.settings = settings
         self.signals = signals
-        self.observer: Observer | None = None
+        self.observer = None
         self.stop_event = threading.Event()
-        self.thread: threading.Thread | None = None
+        self.thread = None
 
     def start(self):
         if self.is_alive():
@@ -294,12 +306,10 @@ class WatcherService:
         self.observer = Observer()
         try:
             self.signals.indexingStarted.emit()
-
-            # Extract options and initialize Index
             options = self.settings.get("watcher_options", {})
             index = AssetReferenceIndex(self.settings["project_root"], self.signals, **options)
-
             index.build_index()
+
             if self.stop_event.is_set():
                 return
             self.signals.indexingFinished.emit()
@@ -315,69 +325,10 @@ class WatcherService:
                 time.sleep(0.5)
         except Exception as e:
             logging.error(f"Critical watcher error: {e}", exc_info=True)
-            self.signals.criticalError.emit("Watcher Error", f"A critical error occurred: {e}")
+            self.signals.criticalError.emit("Watcher Error", f"{e}")
         finally:
             if self.observer and self.observer.is_alive():
                 self.observer.stop()
-                if self.observer.is_alive():
-                    self.observer.join()
+                self.observer.join()
             logging.info("Watcher thread terminated.")
             self.signals.watcherStopped.emit()
-
-
-class ChangeHandler(FileSystemEventHandler):
-    def __init__(self, index: AssetReferenceIndex):
-        super().__init__()
-        self.index = index
-        self.container_exts = tuple(ASSET_HANDLERS.keys())
-        self.tracked_exts = AppConfig.TRACKED_ASSET_EXTENSIONS
-        self._last_deleted = {}
-
-    def on_created(self, event):
-        if event.is_directory:
-            return
-        path = Path(event.src_path)
-        filename = path.name
-
-        # Simulated Move Detection (Delete + Create)
-        if filename in self._last_deleted:
-            old_path, del_time = self._last_deleted[filename]
-            if time.time() - del_time < 1.0:
-                logging.info(f"Detected move via recreation: {old_path.name}")
-                if path.suffix.lower() in self.tracked_exts:
-                    self.index.update_asset_path(old_path, path)
-                del self._last_deleted[filename]
-
-        if path.suffix.lower() in self.container_exts and not self.index.is_on_cooldown(path):
-            self.index.process_container_file(path)
-
-    def on_modified(self, event):
-        if event.is_directory:
-            return
-        path = Path(event.src_path)
-        if path.suffix.lower() in self.container_exts and not self.index.is_on_cooldown(path):
-            self.index.process_container_file(path)
-
-    def on_deleted(self, event):
-        if event.is_directory:
-            return
-        path = Path(event.src_path)
-
-        # Cache deletion for Move Detection
-        if path.suffix.lower() in self.tracked_exts or path.suffix.lower() in self.container_exts:
-            self._last_deleted[path.name] = (path, time.time())
-
-        if path.suffix.lower() in self.container_exts and not self.index.is_on_cooldown(path):
-            self.index.remove_container_from_index(path)
-
-    def on_moved(self, event):
-        src_path, dest_path = Path(event.src_path), Path(event.dest_path)
-        if event.is_directory:
-            self.index.handle_directory_move(src_path, dest_path)
-        else:
-            if src_path.suffix.lower() in self.tracked_exts:
-                self.index.update_asset_path(src_path, dest_path)
-
-            if src_path.suffix.lower() in self.container_exts and not self.index.is_on_cooldown(dest_path):
-                self.index.remove_container_from_index(src_path)
-                self.index.process_container_file(dest_path)

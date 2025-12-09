@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableDelayedExpansion
-title Asset Watchdog Launcher
+title CryWatchdog Launcher
 
 :: ============================================================================
 :: This script automatically sets up a virtual environment, installs the
@@ -17,8 +17,11 @@ set "VENV_DIR=.venv"
 set "PYTHON_EXE=python"
 set "ENTRY_SCRIPT=main.py"
 set "REQUIREMENTS_FILE=pyproject.toml"
-set "LUA_COMPILER=luac54.exe"
-set "LUA_FORMATTER=stylua.exe"
+
+:: !!! UPDATED: Tools are now in the bin folder !!!
+set "TOOLS_DIR=bin"
+set "LUA_COMPILER=%TOOLS_DIR%\luac54.exe"
+set "LUA_FORMATTER=%TOOLS_DIR%\stylua.exe"
 
 :: --- Argument Parsing ---
 set "REINSTALL_MODE=0"
@@ -30,7 +33,7 @@ if /i "%1"=="reinstall" (
 
 :: --- Header ---
 echo =======================================================
-echo              Asset Watchdog Launcher
+echo              CryWatchdog Launcher
 echo =======================================================
 echo.
 
@@ -44,14 +47,17 @@ if not exist "%REQUIREMENTS_FILE%" (
     set "ERROR_MESSAGE=Project file '%REQUIREMENTS_FILE%' not found. Cannot install dependencies."
     goto :error
 )
+
+:: Check for tools in the BIN folder
 if not exist "%LUA_COMPILER%" (
-    set "ERROR_MESSAGE=Lua compiler ('%LUA_COMPILER%') not found. Please place it in the root directory."
+    set "ERROR_MESSAGE=Lua compiler not found at '%LUA_COMPILER%'. Please place 'luac54.exe' inside the '%TOOLS_DIR%' folder."
     goto :error
 )
 if not exist "%LUA_FORMATTER%" (
-    set "ERROR_MESSAGE=Lua formatter ('%LUA_FORMATTER%') not found. Please place it in the root directory."
+    set "ERROR_MESSAGE=Lua formatter not found at '%LUA_FORMATTER%'. Please place 'stylua.exe' inside the '%TOOLS_DIR%' folder."
     goto :error
 )
+
 echo [OK] All required files are present.
 echo.
 
@@ -108,7 +114,7 @@ echo.
 
 :: --- [4/4] Launching Application ---
 echo =======================================================
-echo [4/4] Starting Asset Watchdog...
+echo [4/4] Starting CryWatchdog...
 echo =======================================================
 echo.
 
