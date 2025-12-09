@@ -39,19 +39,28 @@ class TimeOfDayConverter:
 
             prev = self.keys[-1]
             next_k = self.keys[0]
-            if t >= self.keys[0].time and t < self.keys[-1].time:
+
+            # Find correct interval
+            if t < self.keys[0].time:
+                prev = self.keys[-1]
+                next_k = self.keys[0]
+                t_adj = t + 1.0
+                next_time = next_k.time + 1.0
+            elif t >= self.keys[-1].time:
+                prev = self.keys[-1]
+                next_k = self.keys[0]
+                t_adj = t
+                next_time = next_k.time + 1.0
+            else:
+                t_adj = t
                 for i in range(len(self.keys) - 1):
                     if t >= self.keys[i].time and t < self.keys[i + 1].time:
                         prev = self.keys[i]
                         next_k = self.keys[i + 1]
                         break
+                next_time = next_k.time
 
-            t_adj = t
-            prev_time, next_time = prev.time, next_k.time
-            if next_time < prev_time:
-                next_time += 1.0
-            if t < prev_time:
-                t_adj += 1.0
+            prev_time = prev.time
 
             diff = next_time - prev_time
             ratio = 0 if diff <= 1e-6 else (t_adj - prev_time) / diff
@@ -63,21 +72,24 @@ class TimeOfDayConverter:
 
     TIME_SCALE = 144000.0
     FALLBACK_SUN_INTENSITY_SCALAR = 50000.0
+    HDR_DYNAMIC_MULTIPLIER = 1.0
 
     def __init__(self, signals):
         self.signals = signals
 
     def _format_ce5_key(self, time_norm, value, flags):
-        # Round returns an int-compatible float (or int in Py3), no explicit cast needed if just formatting
         time_tick = round(float(time_norm) * self.TIME_SCALE)
 
         if math.isnan(value) or math.isinf(value):
             value = 0.0
 
-        val_str = f"{value:.6f}".rstrip("0").rstrip(".")
+        # Strict formatting to avoid scientific notation
+        val_str = f"{value:.6f}"
+        val_str = val_str.rstrip("0").rstrip(".") if "." in val_str else val_str
         if val_str == "":
             val_str = "0"
 
+        # Force linear interpolation flag (1) for safety
         return f"{time_tick}:{val_str}:0:0:0:0:1:1:0"
 
     def _parse_float_spline(self, keys_str):
@@ -121,18 +133,25 @@ class TimeOfDayConverter:
         for t in sorted(list(times)) or [0.0, 1.0]:
             c = sun_color.evaluate(t)
             m = sun_mult.evaluate(t)
-            h = hdr_pow.evaluate(t)
+            hdr = hdr_pow.evaluate(t)
 
-            # Standard luminance calculation
+            hdr_mult = math.pow(self.HDR_DYNAMIC_MULTIPLIER, hdr)
             lum = c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722
-            final = min(m * lum * math.pow(1.0, h) * self.FALLBACK_SUN_INTENSITY_SCALAR, 550000.0)
+            final = min(m * lum * hdr_mult * self.FALLBACK_SUN_INTENSITY_SCALAR, 550000.0)
+
             new_s.add_key(t, final, 1)
 
         return new_s
 
     def _pretty_print_xml(self, elem):
         xml_str = ET.tostring(elem, encoding="unicode")
-        return xml.dom.minidom.parseString(xml_str).toprettyxml(indent=" ")
+        pretty = xml.dom.minidom.parseString(xml_str).toprettyxml(indent=" ")
+        # Remove potentially duplicate xml declaration
+        if pretty.startswith("<?xml"):
+            parts = pretty.split("\n", 1)
+            if len(parts) > 1:
+                return parts[1]
+        return pretty
 
     def _add_constants_block(self, env_preset):
         consts = ET.SubElement(env_preset, "Constants")
@@ -148,6 +167,9 @@ class TimeOfDayConverter:
             },
         )
         ET.SubElement(consts, "Sky", {"MaterialDef": "", "MaterialLow": ""})
+        # Add minimal required constants
+        wind = ET.SubElement(consts, "Wind", {"BreezeEnabled": "false"})
+        ET.SubElement(wind, "WindVector", {"x": "1", "y": "0", "z": "0"})
 
     def run(self, input_file: Path) -> dict:
         logging.info(f"Converting TimeOfDay: {input_file.name}")
@@ -155,7 +177,6 @@ class TimeOfDayConverter:
             content = input_file.read_text(encoding="latin-1", errors="ignore")
             content_stripped = content.strip()
 
-            # Handle partial XML snippets often found in TOD files
             if (
                 not content_stripped.startswith("<Root>")
                 and not content_stripped.startswith("<TimeOfDay")
@@ -166,10 +187,9 @@ class TimeOfDayConverter:
             try:
                 root = ET.fromstring(content)
             except Exception:
-                # Fallback wrap if parsing fails
                 root = ET.fromstring(f"<Root>{content}</Root>")
 
-            parsed = {}
+            parsed_splines = {}
             for v in root.findall(".//Variable"):
                 name = v.get("Name")
                 if not name:
@@ -178,43 +198,76 @@ class TimeOfDayConverter:
                 spline_node = v.find("Spline")
                 keys = spline_node.get("Keys", "") if spline_node is not None else ""
 
-                if "(" in keys:
-                    parsed[name] = self._parse_color_spline(keys)
+                if "(" in keys and ")" in keys:
+                    parsed_splines[name] = self._parse_color_spline(keys)
                 else:
-                    parsed[name] = self._parse_float_spline(keys)
+                    parsed_splines[name] = self._parse_float_spline(keys)
 
-            if "Sun intensity" not in parsed:
-                parsed["Sun intensity"] = self._calculate_fallback_sun(parsed)
+            has_sun = "Sun intensity" in parsed_splines
+            if not has_sun:
+                parsed_splines["Sun intensity"] = self._calculate_fallback_sun(parsed_splines)
 
             env_root = ET.Element("EnvironmentPreset", {"CryXmlVersion": "2", "version": "4"})
 
             for pid, ptype, pmin, pmax in ORDERED_PARAMS:
-                spline = None
-                found_key = next((k for k, v in LEGACY_MAP.items() if v == pid), None)
+                current_spline = None
+
+                # Mapping logic
+                found_key = None
+                for legacy_key, new_id in LEGACY_MAP.items():
+                    if new_id == pid:
+                        found_key = legacy_key
+                        break
 
                 if pid == "PARAM_SUN_INTENSITY":
-                    spline = parsed.get("Sun intensity")
-                elif found_key in parsed:
-                    spline = parsed[found_key]
+                    if has_sun:
+                        current_spline = parsed_splines.get("Sun intensity")
+                    else:
+                        current_spline = parsed_splines.get("Sun intensity")  # Already calculated
+                elif found_key and found_key in parsed_splines:
+                    current_spline = parsed_splines[found_key]
 
+                # Create XML Node
                 var_node = ET.SubElement(env_root, "var", id=pid, type=ptype, minValue=str(pmin), maxValue=str(pmax))
 
-                keys0, keys1, keys2 = [], [], []
+                if current_spline and current_spline.keys:
+                    # Clean and sort logic is implicitly handled by Spline.add_key sorting
 
-                if spline and spline.keys:
-                    for k in spline.keys:
-                        if ptype == "TYPE_COLOR":
-                            val = k.value if isinstance(k.value, list) else [k.value] * 3
-                            keys0.append(self._format_ce5_key(k.time, max(0, min(100, val[0])), k.flags))
-                            keys1.append(self._format_ce5_key(k.time, max(0, min(100, val[1])), k.flags))
-                            keys2.append(self._format_ce5_key(k.time, max(0, min(100, val[2])), k.flags))
-                        else:
-                            val = k.value[0] if isinstance(k.value, list) else k.value
-                            keys0.append(self._format_ce5_key(k.time, val, k.flags))
+                    if ptype == "TYPE_COLOR":
+                        k_r, k_g, k_b = [], [], []
+                        for k in current_spline.keys:
+                            val = k.value
+                            if isinstance(val, float):
+                                val = [val, val, val]
 
-                ET.SubElement(var_node, "spline0", keys=",".join(keys0) + "," if keys0 else "")
-                ET.SubElement(var_node, "spline1", keys=",".join(keys1) + "," if keys1 else "")
-                ET.SubElement(var_node, "spline2", keys=",".join(keys2) + "," if keys2 else "")
+                            safe_r = max(0.0, min(100.0, val[0]))
+                            safe_g = max(0.0, min(100.0, val[1]))
+                            safe_b = max(0.0, min(100.0, val[2]))
+
+                            k_r.append(self._format_ce5_key(k.time, safe_r, k.flags))
+                            k_g.append(self._format_ce5_key(k.time, safe_g, k.flags))
+                            k_b.append(self._format_ce5_key(k.time, safe_b, k.flags))
+
+                        ET.SubElement(var_node, "spline0", keys=",".join(k_r) + ",")
+                        ET.SubElement(var_node, "spline1", keys=",".join(k_g) + ",")
+                        ET.SubElement(var_node, "spline2", keys=",".join(k_b) + ",")
+                    else:
+                        k_v = []
+                        for k in current_spline.keys:
+                            val = k.value
+                            if isinstance(val, list):
+                                val = val[0]
+                            k_v.append(self._format_ce5_key(k.time, val, k.flags))
+
+                        ET.SubElement(var_node, "spline0", keys=",".join(k_v) + ",")
+                        # CRITICAL: Empty splines must be present to maintain engine array alignment
+                        ET.SubElement(var_node, "spline1", keys="")
+                        ET.SubElement(var_node, "spline2", keys="")
+                else:
+                    # WRITE EMPTY PLACEHOLDERS TO MAINTAIN ORDER
+                    ET.SubElement(var_node, "spline0", keys="")
+                    ET.SubElement(var_node, "spline1", keys="")
+                    ET.SubElement(var_node, "spline2", keys="")
 
             self._add_constants_block(env_root)
 
