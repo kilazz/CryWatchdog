@@ -32,6 +32,7 @@ from app.tasks.cleaner import ProjectCleaner
 from app.tasks.converter import ProjectConverter
 from app.tasks.duplicates import DuplicateFinder
 from app.tasks.finding import MissingAssetFinder, UnusedAssetFinder
+from app.tasks.texture_validator import TextureValidator
 from app.tasks.tod import TimeOfDayConverter
 
 # Dialogs
@@ -41,6 +42,7 @@ from app.ui.dialogs.finding_dlg import MissingAssetsDialog, UnusedAssetsDialog
 from app.ui.dialogs.lua_dlg import LuaToolkitDialog
 from app.ui.dialogs.packer_dlg import PackerDialog
 from app.ui.dialogs.reports_dlg import AnalysisReportDialog
+from app.ui.dialogs.texture_dlg import TextureReportDialog
 from app.ui.dialogs.tod_dlg import TimeOfDayDialog
 
 
@@ -78,6 +80,8 @@ class MainWindow(QMainWindow):
         # Project Menu
         m_proj = QMenu(self)
         m_proj.addAction("Analyze...").triggered.connect(self._analyze)
+        m_proj.addAction("Validate Textures...").triggered.connect(self._validate_textures)
+        m_proj.addSeparator()
         m_proj.addAction("Find Unused...").triggered.connect(self._unused)
         m_proj.addAction("Find Missing...").triggered.connect(self._missing)
         m_proj.addSeparator()
@@ -216,6 +220,8 @@ class MainWindow(QMainWindow):
         self._active_workers.add(w)
 
         def done(res):
+            # IMPORTANT: The try-finally block guarantees that the state resets to IDLE,
+            # even if the callback function (cb) fails with an error.
             try:
                 # Cleanup reference
                 self._active_workers.discard(w)
@@ -299,6 +305,14 @@ class MainWindow(QMainWindow):
                 cat = next((c for c, e in AnalysisReportDialog.EXT_CATEGORIES.items() if ext in e), "Other")
                 prep[cat] += f"{ext}: {count}\n"
         AnalysisReportDialog(self, f"Files: {res.get('total_files', 0)}", prep).exec()
+
+    def _validate_textures(self):
+        if not self.can_run_task(require_project=True):
+            return
+        self.run_task(
+            lambda: TextureValidator(self.project_root, self.core_signals).run(),
+            lambda r: TextureReportDialog(self, r).exec(),
+        )
 
     def _unused(self):
         if not self.can_run_task(require_project=True):
