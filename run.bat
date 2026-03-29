@@ -20,7 +20,7 @@ set "REQUIREMENTS_FILE=pyproject.toml"
 
 :: !!! UPDATED: Tools are now in the bin folder !!!
 set "TOOLS_DIR=bin"
-set "LUA_COMPILER=%TOOLS_DIR%\luac54.exe"
+set "LUA_COMPILER=%TOOLS_DIR%\luac55.exe"
 set "LUA_FORMATTER=%TOOLS_DIR%\stylua.exe"
 
 :: --- Argument Parsing ---
@@ -50,7 +50,7 @@ if not exist "%REQUIREMENTS_FILE%" (
 
 :: Check for tools in the BIN folder
 if not exist "%LUA_COMPILER%" (
-    set "ERROR_MESSAGE=Lua compiler not found at '%LUA_COMPILER%'. Please place 'luac54.exe' inside the '%TOOLS_DIR%' folder."
+    set "ERROR_MESSAGE=Lua compiler not found at '%LUA_COMPILER%'. Please place 'luac55.exe' inside the '%TOOLS_DIR%' folder."
     goto :error
 )
 if not exist "%LUA_FORMATTER%" (

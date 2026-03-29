@@ -29,7 +29,7 @@ class AppConfig:
     CONFIG_FILE = Path("config.json")
 
     # --- Tool Paths ---
-    LUA_COMPILER_PATH = TOOLS_DIR / "luac54.exe"
+    LUA_COMPILER_PATH = TOOLS_DIR / "luac55.exe"
     STYLUA_PATH = TOOLS_DIR / "stylua.exe"
 
     # --- Default Constants (Fallback) ---

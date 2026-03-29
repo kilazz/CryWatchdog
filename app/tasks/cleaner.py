@@ -7,7 +7,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import TypedDict
 
-import chardet
+import charset_normalizer
 
 from app.config import AppConfig, CleanupStatus
 from app.core.utils import atomic_write, find_files_by_extensions, normalize_path
@@ -34,7 +34,7 @@ def _cleaner_process_file_worker(file_path: Path, options: CleanerOptions) -> tu
         try:
             original_text = original_bytes.decode("utf-8")
         except UnicodeDecodeError:
-            detected = chardet.detect(original_bytes)
+            detected = charset_normalizer.detect(original_bytes)
             encoding = detected["encoding"] or "utf-8"
             original_text = original_bytes.decode(encoding, errors="replace")
 
