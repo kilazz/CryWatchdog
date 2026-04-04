@@ -4,8 +4,9 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import Slot
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QGroupBox,
     QHBoxLayout,
@@ -58,8 +59,13 @@ class LuaToolkitDialog(QDialog):
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["File", "Status", "Msg"])
         self.tree.header().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.tree.setSortingEnabled(True)
+        self.tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
         diag_layout.addWidget(self.tree)
         layout.addWidget(grp_diag)
+
+        QShortcut(QKeySequence.StandardKey.Copy, self.tree, self._copy_selection)
+        QShortcut(QKeySequence.StandardKey.SelectAll, self.tree, self.tree.selectAll)
 
         # Formatter Group
         grp_fmt = QGroupBox("Formatter")
@@ -80,6 +86,13 @@ class LuaToolkitDialog(QDialog):
 
         self.btn_diag.setEnabled(ok_luac)
         self.btn_fmt.setEnabled(ok_stylua)
+
+    def _copy_selection(self):
+        selected = self.tree.selectedItems()
+        if not selected:
+            return
+        lines = [f"{item.text(0)}\t{item.text(1)}\t{item.text(2)}" for item in selected]
+        QApplication.clipboard().setText("\n".join(lines))
 
     def _run_diag(self):
         if not self.main_window.can_run_task():
