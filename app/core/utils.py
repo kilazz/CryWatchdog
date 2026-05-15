@@ -17,6 +17,17 @@ def normalize_path(path: Path | str) -> str:
     return path
 
 
+def get_safe_rel_path(file_path: Path, root_path: Path) -> str:
+    """
+    Safely gets the relative POSIX path of a file compared to a root directory.
+    Falls back to just the file name if the file is not relative to the root.
+    """
+    try:
+        return file_path.relative_to(root_path).as_posix()
+    except ValueError:
+        return file_path.name
+
+
 def ensure_writable(file_path: Path):
     """
     Attempts to make a file writable using Perforce (P4) or OS chmod.

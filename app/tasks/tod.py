@@ -220,10 +220,7 @@ class TimeOfDayConverter:
                         break
 
                 if pid == "PARAM_SUN_INTENSITY":
-                    if has_sun:
-                        current_spline = parsed_splines.get("Sun intensity")
-                    else:
-                        current_spline = parsed_splines.get("Sun intensity")  # Already calculated
+                    current_spline = parsed_splines.get("Sun intensity")
                 elif found_key and found_key in parsed_splines:
                     current_spline = parsed_splines[found_key]
 

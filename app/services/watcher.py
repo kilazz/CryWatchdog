@@ -91,7 +91,8 @@ class WatcherService:
 
                     # 1. Try to find a deleted file with the exact same name (Move to different folder)
                     exact_name_matches = [p for p, t in _last_deleted if p.name == added.name]
-                    if len(exact_name_matches) == 1 or len(exact_name_matches) > 1:
+
+                    if exact_name_matches:
                         matching_deleted = exact_name_matches[0]
                     else:
                         # 2. Try to find a deleted file in the same directory (Rename in same folder)

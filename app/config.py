@@ -1,7 +1,6 @@
 # app/config.py
 import json
 import logging
-import re
 import sys
 from collections import namedtuple
 from enum import Enum, auto
@@ -79,10 +78,6 @@ class AppConfig:
     # --- Static / Hardcoded Configurations ---
     HANDLED_TEXT_EXTENSIONS: ClassVar[set[str]] = {".mtl", ".xml", ".lay", ".lyr", ".cdf", ".lua"}
     XML_EXTENSIONS: ClassVar[set[str]] = {".mtl", ".xml", ".lay", ".lyr", ".cdf"}
-
-    LOG_MAX_BLOCK_COUNT: int = 5000
-    INVALID_PATH_CHARS_RE = re.compile(r"[<>|?*]")
-    MAX_CMD_LINE_LENGTH = 8191
 
     @classmethod
     def load(cls):

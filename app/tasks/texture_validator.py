@@ -6,6 +6,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import ClassVar
 
+from app.core.utils import get_safe_rel_path
+
 
 class TextureValidator:
     """
@@ -16,7 +18,6 @@ class TextureValidator:
     """
 
     # Source formats commonly used in CryEngine/Lumberyard/O3DE
-    # RUF012: Mutable class attributes should be annotated with ClassVar
     SOURCE_EXTS: ClassVar[set[str]] = {".tif", ".tiff", ".png", ".tga", ".bmp", ".gif"}
 
     def __init__(self, project_root: Path, signals):
@@ -33,11 +34,8 @@ class TextureValidator:
             # located in the same folder as the source.
             dds_path = source_path.with_suffix(".dds")
 
-            # Calculate relative path for reporting
-            try:
-                rel_path = source_path.relative_to(self.project_root).as_posix()
-            except ValueError:
-                rel_path = source_path.name
+            # Use the shared utility for safe relative path calculation
+            rel_path = get_safe_rel_path(source_path, self.project_root)
 
             # Check 1: Does compiled file exist?
             if not dds_path.exists():

@@ -1,6 +1,7 @@
 # app/tasks/finding.py
 import logging
 import os
+import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -35,6 +36,7 @@ class UnusedAssetFinder:
         self.signals = signals
 
     def run(self) -> dict:
+        start_time = time.time()
         logging.info("Indexing filesystem for unused assets...")
         assets = set()
         containers = []
@@ -93,11 +95,13 @@ class UnusedAssetFinder:
         unused = [asset_map[s] for s in assets if s not in refs]
 
         summary = f"Found {len(unused)} unused assets."
+        duration = time.time() - start_time
+
         return {
             "summary": summary,
             "unused_files": sorted(unused),
             "total_assets": len(assets),
-            "duration": 0,
+            "duration": duration,
         }
 
 
@@ -112,6 +116,7 @@ class MissingAssetFinder:
         self.signals = signals
 
     def run(self) -> dict:
+        start_time = time.time()
         logging.info("Scanning for broken references...")
 
         # Find all files that can contain references
@@ -155,9 +160,11 @@ class MissingAssetFinder:
                     pass
 
         summary = f"Found {len(missing_map)} broken references."
+        duration = time.time() - start_time
+
         return {
             "summary": summary,
             "missing_map": dict(missing_map),
-            "duration": 0,
+            "duration": duration,
             "total_scanned": len(containers),
         }
