@@ -27,7 +27,7 @@ def main():
     """
     Initializes and runs the CryWatchdog application.
     """
-    # CRITICAL: Fixes recursive process spawning on Windows when using ProcessPoolExecutor/ThreadPoolExecutor
+    # Fixes recursive process spawning on Windows when using ProcessPoolExecutor/ThreadPoolExecutor
     # This must be the very first line in main() to prevent the application from spawning infinite copies of itself.
     freeze_support()
 

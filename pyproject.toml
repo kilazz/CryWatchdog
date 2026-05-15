@@ -1,20 +1,20 @@
 [build-system]
-requires = ["scikit-build-core"]
-build-backend = "scikit_build_core.build"
+requires = ["setuptools>=82.0.1"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "CryWatchdog"
 description = "CryWatchdog"
 version = "1.0.0"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 license = "MIT"
 authors = [{ name = "kilazz"}]
 
 dependencies = [
-    "PySide6>=6.11.0",
+    "PySide6>=6.11.1",
     "qdarkstyle>=3.2.3",
-    "charset-normalizer>=3.4.6",
+    "charset-normalizer>=3.4.7",
     "watchfiles>=1.1.1",
 ]
 
@@ -27,6 +27,9 @@ dev = [
     "psutil",
     "tqdm",
 ]
+
+[tool.setuptools]
+packages = ["app"]
 
 [tool.ruff]
 exclude = [
@@ -91,6 +94,3 @@ quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
-
-[tool.scikit-build]
-wheel.packages = ["app"]
