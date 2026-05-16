@@ -65,7 +65,7 @@ exclude = [
 ]
 
 line-length = 120
-target-version = "py313"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = [

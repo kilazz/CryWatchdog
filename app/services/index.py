@@ -29,7 +29,7 @@ def _index_parse_worker(file_path: Path, root_path: Path) -> tuple[str | None, s
         try:
             if file_path.exists() and file_path.stat().st_size > 0:
                 return rel_path, Handler.parse(file_path)
-        except (OSError, ValueError):
+        except OSError, ValueError:
             pass
         time.sleep(0.05)
     return rel_path, None
