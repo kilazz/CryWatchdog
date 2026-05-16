@@ -25,6 +25,6 @@ It combines real-time asset tracking with a suite of powerful diagnostic and bat
 *   **Standardization:** Normalizes text encoding (UTF-8), line endings, and path separators.
 
 ## 🛠️ Tech Stack
-*   **Python 3.13**
+*   **Python 3.14**
 *   **PySide6 (Qt)**
 *   **watchfiles** for fast filesystem events.
