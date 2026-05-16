@@ -45,7 +45,9 @@ class TaskManager(QObject):
                 logging.error(f"Error in task callback: {e}")
                 traceback.print_exc()
                 if self.parent_widget:
-                    QMessageBox.critical(self.parent_widget, "Callback Error", f"An error occurred after the task finished:\n{e}")
+                    QMessageBox.critical(
+                        self.parent_widget, "Callback Error", f"An error occurred after the task finished:\n{e}"
+                    )
             finally:
                 self.stateChanged.emit(AppState.IDLE)
 

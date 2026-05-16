@@ -50,7 +50,7 @@ class ProjectConverter:
             except OSError as e:
                 logging.error(f"  - [FAIL] Could not rename {path.name}: {e}")
                 # Try to recover if the second rename failed
-                if 'temp_path' in locals() and temp_path.exists():
+                if "temp_path" in locals() and temp_path.exists():
                     with contextlib.suppress(OSError):
                         temp_path.rename(path)
                 error_count += 1
