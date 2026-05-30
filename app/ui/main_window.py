@@ -259,12 +259,35 @@ class MainWindow(QMainWindow):
     def _analyze_done(self, res):
         if not res:
             return
-        prep = defaultdict(str)
+
+        # Map to track Category -> { Extension: Count }
+        prep = defaultdict(dict)
+
+        logging.info("--- [ANALYSIS] Project File Distribution Report ---")
+        logging.info(f"Total files scanned: {res.get('total_files', 0)}")
+        logging.info(f"Scan duration: {res.get('duration', 0.0):.2f}s")
+
         if "extensions_counter" in res:
-            for ext, count in res["extensions_counter"].items():
+            # Sort format extensions by highest file count first
+            sorted_extensions = sorted(
+                res["extensions_counter"].items(), key=lambda x: x[1], reverse=True
+            )
+
+            for ext, count in sorted_extensions:
                 cat = next((c for c, e in AnalysisReportDialog.EXT_CATEGORIES.items() if ext in e), "Other")
-                prep[cat] += f"{ext}: {count}\n"
-        AnalysisReportDialog(self, f"Files: {res.get('total_files', 0)}", prep).exec()
+                prep[cat][ext] = count
+                # Log extensions to the rolling console text field
+                logging.info(f"  Extension: {ext:<12} | Count: {count}")
+
+        logging.info("--- [ANALYSIS] End of Report ---")
+
+        # Open updated dialog with structured category data
+        dlg = AnalysisReportDialog(
+            self,
+            f"Total Files Scanned: {res.get('total_files', 0)} (Time: {res.get('duration', 0.0):.2f}s)",
+            prep,
+        )
+        dlg.exec()
 
     def _validate_textures(self):
         if not self.can_run_task(require_project=True):

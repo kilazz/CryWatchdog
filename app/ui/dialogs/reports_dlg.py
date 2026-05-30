@@ -1,12 +1,17 @@
 # app/ui/dialogs/reports_dlg.py
 from typing import ClassVar
 
-from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
+    QPushButton,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
 )
 
@@ -14,6 +19,11 @@ from app.config import UIConfig
 
 
 class AnalysisReportDialog(QDialog):
+    """
+    Dialog to display the project file analysis report.
+    Groups discovered files by predefined categories in a scrollable tree structure.
+    """
+
     EXT_CATEGORIES: ClassVar[dict[str, set[str]]] = {
         "Textures": {".dds", ".tif", ".tiff", ".png", ".jpg", ".tga"},
         "Models": {".cgf", ".cga", ".chr", ".skin", ".fbx", ".obj"},
@@ -25,27 +35,95 @@ class AnalysisReportDialog(QDialog):
     def __init__(self, parent, header_text: str, prepared_data: dict):
         super().__init__(parent)
         self.setWindowTitle("Analysis Report")
-        self.resize(1000, 600)
+        self.resize(600, 500)
 
-        # Renamed 'l' to 'layout' to fix E741
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(header_text))
-        cols = QHBoxLayout()
-        layout.addLayout(cols)
+
+        # Header Info Label
+        self.header_lbl = QLabel(header_text)
+        self.header_lbl.setStyleSheet("font-weight: bold; font-size: 13px;")
+        layout.addWidget(self.header_lbl)
+
+        # Tree Widget (provides built-in scrolling)
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["Category / Extension", "Files Count"])
+        self.tree.setFont(UIConfig.FONT_MONOSPACE)
+        self.tree.setColumnWidth(0, 350)
+        layout.addWidget(self.tree)
+
+        self._populate(prepared_data)
+
+        # Bottom Button Bar (Copy Report + Close)
+        btn_layout = QHBoxLayout()
+
+        self.copy_btn = QPushButton("Copy Report")
+        self.copy_btn.clicked.connect(self._copy_to_clipboard)
+        btn_layout.addWidget(self.copy_btn)
+
+        btn_layout.addStretch()
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        btns.rejected.connect(self.reject)
+        btn_layout.addWidget(btns)
+
+        layout.addLayout(btn_layout)
+
+    def _populate(self, prepared_data: dict):
+        """
+        Populates the tree items. Handles both structured dictionary inputs
+        and plain text fallback conversions.
+        """
+        self.tree.clear()
 
         for cat in self.EXT_CATEGORIES:
-            if txt := prepared_data.get(cat):
-                v = QVBoxLayout()
-                lbl = QLabel(f"--- {cat} ---")
-                lbl.setFont(UIConfig.FONT_MONOSPACE)
-                v.addWidget(lbl)
-                content = QLabel(txt)
-                content.setFont(UIConfig.FONT_MONOSPACE)
-                content.setAlignment(Qt.AlignmentFlag.AlignTop)
-                v.addWidget(content)
-                v.addStretch()
-                cols.addLayout(v)
+            content = prepared_data.get(cat)
+            if not content:
+                continue
 
-        btns = QDialogButtonBox(QDialogButtonBox.Close)
-        btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
+            # Create Category Parent Node
+            cat_item = QTreeWidgetItem([cat, ""])
+            cat_item.setForeground(0, QColor(UIConfig.COLOR_INFO))
+            self.tree.addTopLevelItem(cat_item)
+
+            # Dictionary payload (clean and preferred format)
+            if isinstance(content, dict):
+                total_count = sum(content.values())
+                sorted_items = sorted(content.items(), key=lambda x: x[1], reverse=True)
+                for ext, count in sorted_items:
+                    ext_item = QTreeWidgetItem([ext, str(count)])
+                    cat_item.addChild(ext_item)
+                cat_item.setText(1, f"Total: {total_count}")
+
+            # String payload (legacy fallback parsing)
+            elif isinstance(content, str):
+                lines = [line.strip() for line in content.strip().split("\n") if line.strip()]
+                total_count = 0
+                for line in lines:
+                    if ":" in line:
+                        ext, count_str = line.split(":", 1)
+                        try:
+                            count = int(count_str.strip())
+                            total_count += count
+                            ext_item = QTreeWidgetItem([ext.strip(), str(count)])
+                        except ValueError:
+                            ext_item = QTreeWidgetItem([ext.strip(), count_str.strip()])
+                        cat_item.addChild(ext_item)
+                cat_item.setText(1, f"Total: {total_count}")
+
+        self.tree.expandAll()
+
+    def _copy_to_clipboard(self):
+        """Formats the current tree contents to a structured string and copies it to clipboard."""
+        lines = [self.header_lbl.text(), "=" * 50]
+
+        root = self.tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            cat_item = root.child(i)
+            lines.append(f"\n[{cat_item.text(0)}] — {cat_item.text(1)}")
+            for j in range(cat_item.childCount()):
+                child = cat_item.child(j)
+                lines.append(f"  {child.text(0):<12} : {child.text(1)}")
+
+        structured_text = "\n".join(lines)
+        QApplication.clipboard().setText(structured_text)
+        QMessageBox.information(self, "Success", "Report copied to clipboard.")
