@@ -269,9 +269,7 @@ class MainWindow(QMainWindow):
 
         if "extensions_counter" in res:
             # Sort format extensions by highest file count first
-            sorted_extensions = sorted(
-                res["extensions_counter"].items(), key=lambda x: x[1], reverse=True
-            )
+            sorted_extensions = sorted(res["extensions_counter"].items(), key=lambda x: x[1], reverse=True)
 
             for ext, count in sorted_extensions:
                 cat = next((c for c, e in AnalysisReportDialog.EXT_CATEGORIES.items() if ext in e), "Other")
