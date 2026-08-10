@@ -1,0 +1,45 @@
+{
+    "textures": [
+        ".bmp",
+        ".dds",
+        ".exr",
+        ".gfx",
+        ".gif",
+        ".hdr",
+        ".jpeg",
+        ".jpg",
+        ".png",
+        ".tga",
+        ".tif",
+        ".tiff"
+    ],
+    "tracked": [
+        ".dds",
+        ".tif",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".tga",
+        ".bmp",
+        ".gif",
+        ".hdr",
+        ".mtl",
+        ".xml",
+        ".lay",
+        ".lyr",
+        ".cdf",
+        ".lua",
+        ".cgf",
+        ".chr",
+        ".cga",
+        ".skin",
+        ".adb"
+    ],
+    "packer": {
+        "pack_src": "F:\\Dev\\Edit\\ZapretR\\lua",
+        "pack_out": "F:\\zzzzz.txt",
+        "pack_ext": ".lua, .xml, .txt, .cfg",
+        "unpack_src": "",
+        "unpack_out": "F:\\Dev\\Edit\\ZapretR\\lua"
+    }
+}

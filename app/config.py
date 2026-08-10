@@ -115,9 +115,20 @@ class AppConfig:
 AppConfig.load()
 
 
-class UIConfig:
-    FONT_MONOSPACE = QFont("Consolas")
-    FONT_MONOSPACE.setPointSize(10)
+class UIConfigMeta(type):
+    _font_monospace: QFont | None = None
+
+    @property
+    def FONT_MONOSPACE(cls) -> QFont:
+        if cls._font_monospace is None:
+            font = QFont("Consolas")
+            font.setStyleHint(QFont.StyleHint.Monospace)
+            font.setPixelSize(13)
+            cls._font_monospace = font
+        return cls._font_monospace
+
+
+class UIConfig(metaclass=UIConfigMeta):
     COLOR_SUCCESS = "#66BB6A"
     COLOR_ERROR = "#E57373"
     COLOR_WARNING = "#FFCC80"

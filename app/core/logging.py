@@ -2,11 +2,17 @@ import html
 import logging
 from logging.handlers import RotatingFileHandler
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, qInstallMessageHandler
 
 from app.config import AppConfig, UIConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _qt_message_handler(msg_type, context, message):
+    # Filter out harmless Qt internal C++ font/stylesheet warnings
+    if "QFont::setPointSize" in message or "Point size <= 0" in message:
+        return
 
 
 class QtLogHandler(logging.Handler):
@@ -36,6 +42,8 @@ class QtLogHandler(logging.Handler):
 
 
 def setup_logging(qt_handler: QtLogHandler):
+    qInstallMessageHandler(_qt_message_handler)
+
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
 
