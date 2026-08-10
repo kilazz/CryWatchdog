@@ -104,7 +104,8 @@ AppConfig.load()
 
 
 class UIConfig:
-    FONT_MONOSPACE = QFont("Consolas", 10)
+    FONT_MONOSPACE = QFont("Consolas")
+    FONT_MONOSPACE.setPointSize(10)
     COLOR_SUCCESS = "#66BB6A"
     COLOR_ERROR = "#E57373"
     COLOR_WARNING = "#FFCC80"

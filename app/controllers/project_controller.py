@@ -4,6 +4,7 @@ import logging
 from collections import defaultdict
 from typing import TYPE_CHECKING
 
+from PySide6.QtWidgets import QMessageBox
 from qfluentwidgets import InfoBar, InfoBarPosition
 
 from app.tasks.analyzer import ProjectAnalyzer
@@ -76,8 +77,9 @@ class ProjectController:
         if not self.window.can_run_task(require_project=True) or self.window.project_root is None:
             return
         project_root = self.window.project_root
-        dlg = CleanerDialog(self.window)
-        if dlg.exec():
+
+        msg = "This will irreversibly rename ALL files and folders in the project to lowercase.\n\nARE YOU SURE?"
+        if QMessageBox.question(self.window, "Confirm Conversion", msg) == QMessageBox.StandardButton.Yes:
             self.window.run_task(
                 lambda: ProjectConverter(project_root, progress_callback=self._progress_cb).run(),
                 self._on_convert_done,
