@@ -1,4 +1,3 @@
-# app/ui/dialogs/lua_dlg.py
 import contextlib
 import time
 from pathlib import Path
@@ -37,7 +36,6 @@ class LuaToolkitDialog(QDialog):
     def _init_ui(self):
         layout = QVBoxLayout(self)
 
-        # Status Group
         status = QGroupBox("Status")
         status_layout = QHBoxLayout(status)
         self.lbl_luac = QLabel("luac: ...")
@@ -46,7 +44,6 @@ class LuaToolkitDialog(QDialog):
         status_layout.addWidget(self.lbl_stylua)
         layout.addWidget(status)
 
-        # Diagnostics Group
         grp_diag = QGroupBox("Diagnostics")
         diag_layout = QVBoxLayout(grp_diag)
         self.btn_diag = QPushButton("Run Diagnostics")
@@ -67,7 +64,6 @@ class LuaToolkitDialog(QDialog):
         QShortcut(QKeySequence.StandardKey.Copy, self.tree, self._copy_selection)
         QShortcut(QKeySequence.StandardKey.SelectAll, self.tree, self.tree.selectAll)
 
-        # Formatter Group
         grp_fmt = QGroupBox("Formatter")
         fmt_layout = QVBoxLayout(grp_fmt)
         self.btn_fmt = QPushButton("Format All")
@@ -76,7 +72,6 @@ class LuaToolkitDialog(QDialog):
         layout.addWidget(grp_fmt)
 
     def _check_deps(self):
-        # Initialize toolkit just to check paths (dummy root)
         t = LuaToolkit(Path("."), None)
         ok_luac = t.luac.is_file()
         ok_stylua = t.stylua.is_file()
@@ -111,7 +106,7 @@ class LuaToolkitDialog(QDialog):
         if not self.main_window.can_run_task():
             return
 
-        if QMessageBox.question(self, "Confirm", "Irreversible format?") == QMessageBox.Yes:
+        if QMessageBox.question(self, "Confirm", "Irreversible format?") == QMessageBox.StandardButton.Yes:
             self.main_window.run_task(
                 lambda: LuaToolkit(self.main_window.project_root, self.main_window.core_signals).run_formatting({}),
                 self.main_window.on_task_done,

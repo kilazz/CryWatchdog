@@ -1,21 +1,22 @@
-# app/tasks/tod.py
+from __future__ import annotations
+
 import contextlib
 import logging
 import math
 import re
 import xml.dom.minidom
 import xml.etree.ElementTree as ET
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app.data.ce_params import LEGACY_MAP, ORDERED_PARAMS
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
 
 class TimeOfDayConverter:
-    """
-    Task to convert legacy CryEngine (CE3/CE4) TimeOfDay XML files
-    to the newer CryEngine 5 format (.env + .xml presets).
-    """
-
     class Key:
         def __init__(self, time, value, flags=0):
             self.time = float(time)
@@ -40,7 +41,6 @@ class TimeOfDayConverter:
             prev = self.keys[-1]
             next_k = self.keys[0]
 
-            # Find correct interval
             if t < self.keys[0].time:
                 prev = self.keys[-1]
                 next_k = self.keys[0]
@@ -83,13 +83,11 @@ class TimeOfDayConverter:
         if math.isnan(value) or math.isinf(value):
             value = 0.0
 
-        # Strict formatting to avoid scientific notation
         val_str = f"{value:.6f}"
         val_str = val_str.rstrip("0").rstrip(".") if "." in val_str else val_str
         if val_str == "":
             val_str = "0"
 
-        # Force linear interpolation flag (1) for safety
         return f"{time_tick}:{val_str}:0:0:0:0:1:1:0"
 
     def _parse_float_spline(self, keys_str):
@@ -126,11 +124,9 @@ class TimeOfDayConverter:
             hdr_pow.add_key(0, 0)
 
         new_s = self.Spline()
-        times = (
-            set(k.time for k in sun_color.keys) | set(k.time for k in sun_mult.keys) | set(k.time for k in hdr_pow.keys)
-        )
+        times = {k.time for k in sun_color.keys} | {k.time for k in sun_mult.keys} | {k.time for k in hdr_pow.keys}
 
-        for t in sorted(list(times)) or [0.0, 1.0]:
+        for t in sorted(times) or [0.0, 1.0]:
             c = sun_color.evaluate(t)
             m = sun_mult.evaluate(t)
             hdr = hdr_pow.evaluate(t)
@@ -146,7 +142,6 @@ class TimeOfDayConverter:
     def _pretty_print_xml(self, elem):
         xml_str = ET.tostring(elem, encoding="unicode")
         pretty = xml.dom.minidom.parseString(xml_str).toprettyxml(indent=" ")
-        # Remove potentially duplicate xml declaration
         if pretty.startswith("<?xml"):
             parts = pretty.split("\n", 1)
             if len(parts) > 1:
@@ -167,12 +162,11 @@ class TimeOfDayConverter:
             },
         )
         ET.SubElement(consts, "Sky", {"MaterialDef": "", "MaterialLow": ""})
-        # Add minimal required constants
         wind = ET.SubElement(consts, "Wind", {"BreezeEnabled": "false"})
         ET.SubElement(wind, "WindVector", {"x": "1", "y": "0", "z": "0"})
 
     def run(self, input_file: Path) -> dict:
-        logging.info(f"Converting TimeOfDay: {input_file.name}")
+        logger.info(f"Converting TimeOfDay: {input_file.name}")
         try:
             content = input_file.read_text(encoding="latin-1", errors="ignore")
             content_stripped = content.strip()
@@ -212,7 +206,6 @@ class TimeOfDayConverter:
             for pid, ptype, pmin, pmax in ORDERED_PARAMS:
                 current_spline = None
 
-                # Mapping logic
                 found_key = None
                 for legacy_key, new_id in LEGACY_MAP.items():
                     if new_id == pid:
@@ -224,12 +217,9 @@ class TimeOfDayConverter:
                 elif found_key and found_key in parsed_splines:
                     current_spline = parsed_splines[found_key]
 
-                # Create XML Node
                 var_node = ET.SubElement(env_root, "var", id=pid, type=ptype, minValue=str(pmin), maxValue=str(pmax))
 
                 if current_spline and current_spline.keys:
-                    # Clean and sort logic is implicitly handled by Spline.add_key sorting
-
                     if ptype == "TYPE_COLOR":
                         k_r, k_g, k_b = [], [], []
                         for k in current_spline.keys:
@@ -257,11 +247,9 @@ class TimeOfDayConverter:
                             k_v.append(self._format_ce5_key(k.time, val, k.flags))
 
                         ET.SubElement(var_node, "spline0", keys=",".join(k_v) + ",")
-                        # CRITICAL: Empty splines must be present to maintain engine array alignment
                         ET.SubElement(var_node, "spline1", keys="")
                         ET.SubElement(var_node, "spline2", keys="")
                 else:
-                    # WRITE EMPTY PLACEHOLDERS TO MAINTAIN ORDER
                     ET.SubElement(var_node, "spline0", keys="")
                     ET.SubElement(var_node, "spline1", keys="")
                     ET.SubElement(var_node, "spline2", keys="")
@@ -284,9 +272,9 @@ class TimeOfDayConverter:
                 f.write(self._pretty_print_xml(tod_root))
 
             summary = f"Created:\n- {out_env.name}\n- {out_tod.name}"
-            logging.info(f"✅ {summary}")
+            logger.info(f"✅ {summary}")
             return {"summary": summary}
 
         except Exception as e:
-            logging.error(f"Conversion failed: {e}", exc_info=True)
+            logger.error(f"Conversion failed: {e}", exc_info=True)
             return {"summary": f"Error: {e}"}

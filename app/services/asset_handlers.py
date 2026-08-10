@@ -1,20 +1,21 @@
-# app/services/asset_handlers.py
+from __future__ import annotations
+
 import logging
 import mmap
 import re
 from abc import ABC, abstractmethod
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app.config import AppConfig
 from app.core.utils import atomic_write, normalize_path
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
 
 class AssetHandler(ABC):
-    """
-    Abstract Base Class for handling different file formats (XML, Lua, etc.).
-    Defines methods for parsing dependencies and rewriting paths.
-    """
-
     @staticmethod
     @abstractmethod
     def parse(file_path: Path) -> set[str]:
@@ -27,11 +28,6 @@ class AssetHandler(ABC):
 
 
 class XmlAssetHandler(AssetHandler):
-    """
-    Optimized handler using MMAP for reading and REGEX for writing.
-    Preserves original formatting/indentation perfectly by avoiding XML parsers.
-    """
-
     _EXT_PATTERN = "|".join(re.escape(ext) for ext in AppConfig.TRACKED_ASSET_EXTENSIONS)
 
     _BYTES_REGEX = re.compile(
@@ -94,18 +90,13 @@ class XmlAssetHandler(AssetHandler):
 
             if new_content != original_content:
                 atomic_write(file_path, new_content, encoding="utf-8")
-                logging.info(f"  - [OK] Patched '{file_path.name}' (Format Preserved)")
+                logger.info(f"  - [OK] Patched '{file_path.name}' (Format Preserved)")
 
         except Exception as e:
-            logging.error(f"  - [FAIL] Failed to rewrite '{file_path.name}': {e}")
+            logger.error(f"  - [FAIL] Failed to rewrite '{file_path.name}': {e}")
 
 
 class LuaAssetHandler(AssetHandler):
-    """
-    Handler for Lua scripts.
-    Matches strings that end with tracked extensions.
-    """
-
     _EXT_PATTERN = "|".join(re.escape(ext.lstrip(".")) for ext in AppConfig.TRACKED_ASSET_EXTENSIONS)
     _BYTES_REGEX = re.compile(
         rb'([\'"])([^\'"]+\.(?:' + _EXT_PATTERN.encode("utf-8") + rb"))\1",
@@ -154,9 +145,9 @@ class LuaAssetHandler(AssetHandler):
 
             if content != new_content:
                 atomic_write(file_path, new_content, encoding="utf-8")
-                logging.info(f"  - [OK] Patched LUA '{file_path.name}'")
+                logger.info(f"  - [OK] Patched LUA '{file_path.name}'")
         except Exception as e:
-            logging.error(f"  - [FAIL] Failed to rewrite LUA '{file_path.name}': {e}")
+            logger.error(f"  - [FAIL] Failed to rewrite LUA '{file_path.name}': {e}")
 
 
 ASSET_HANDLERS = {

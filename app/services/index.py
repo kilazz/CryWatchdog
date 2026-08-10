@@ -6,16 +6,16 @@ from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from pathlib import Path
+from typing import Any
 
 from app.config import AppConfig
 from app.core.utils import find_files_by_extensions, normalize_path
 from app.services.asset_handlers import ASSET_HANDLERS
 
+logger = logging.getLogger(__name__)
+
 
 def _index_parse_worker(file_path: Path, root_path: Path) -> tuple[str | None, set[str] | None]:
-    """
-    Worker function for the index builder.
-    """
     try:
         rel_path = normalize_path(file_path.relative_to(root_path))
     except ValueError:
@@ -36,11 +36,7 @@ def _index_parse_worker(file_path: Path, root_path: Path) -> tuple[str | None, s
 
 
 class AssetReferenceIndex:
-    """
-    In-memory bidirectional index of asset references.
-    """
-
-    def __init__(self, root_path: Path, signals, **kwargs: bool):
+    def __init__(self, root_path: Path, signals, **kwargs: Any):
         self.root_path = root_path
         self.signals = signals
         self.dry_run = kwargs.get("dry_run", False)
@@ -56,16 +52,20 @@ class AssetReferenceIndex:
         return time.time() < self._write_cooldowns.get(abs_path, 0)
 
     def build_index(self):
-        logging.info("Building asset reference index...")
+        logger.info("Building asset reference index...")
         container_files = find_files_by_extensions(self.root_path, tuple(ASSET_HANDLERS.keys()))
 
         if not container_files:
-            logging.warning("No container files found. Index is empty.")
+            logger.warning("No container files found. Index is empty.")
             return
 
         with ProcessPoolExecutor(max_workers=os.cpu_count() or 1) as executor:
             worker_func = partial(_index_parse_worker, root_path=self.root_path)
-            parsed_results = [r for r in executor.map(worker_func, container_files) if r and r[0] and r[1] is not None]
+            parsed_results: list[tuple[str, set[str]]] = [
+                (r[0], r[1])
+                for r in executor.map(worker_func, container_files)
+                if r and r[0] is not None and r[1] is not None
+            ]
 
         with self._lock:
             self.reference_to_containers.clear()
@@ -75,7 +75,7 @@ class AssetReferenceIndex:
                 for ref in found_refs:
                     self.reference_to_containers[ref].add(container_rel_path)
 
-        logging.info(f"Index built. Tracking references in {len(self.container_to_references)} files.")
+        logger.info(f"Index built. Tracking references in {len(self.container_to_references)} files.")
 
     def process_container_file(self, container_abs_path: Path):
         if self.is_on_cooldown(container_abs_path):
@@ -158,7 +158,7 @@ class AssetReferenceIndex:
             if not affected_containers:
                 return
 
-            logging.info(
+            logger.info(
                 f"Rename detected: '{old_rel_path}' -> '{new_rel_path}'. Patching {len(affected_containers)} file(s)..."
             )
 
@@ -167,12 +167,11 @@ class AssetReferenceIndex:
                 if Handler:
                     full_path = self.root_path / rel_path_str
                     if self.dry_run:
-                        logging.info(f"  [DRY RUN] Would patch: {rel_path_str}")
+                        logger.info(f"  [DRY RUN] Would patch: {rel_path_str}")
                     else:
                         Handler.rewrite(full_path, replacements, is_dir_move=False)
                         self._write_cooldowns[full_path] = time.time() + 2.0
 
-            # Update In-Memory Index
             for old_v in old_variants:
                 if old_v in self.reference_to_containers:
                     containers_to_move = self.reference_to_containers.pop(old_v)
@@ -202,7 +201,7 @@ class AssetReferenceIndex:
             if not affected_containers:
                 return
 
-            logging.info(
+            logger.info(
                 f"Directory rename: '{old_dir_rel}' -> '{new_dir_rel}'. Patching {len(affected_containers)} files..."
             )
 
@@ -212,7 +211,7 @@ class AssetReferenceIndex:
                 if Handler:
                     full_path = self.root_path / rel_path_str
                     if self.dry_run:
-                        logging.info(f"  [DRY RUN] Would patch (Dir Move): {rel_path_str}")
+                        logger.info(f"  [DRY RUN] Would patch (Dir Move): {rel_path_str}")
                     else:
                         Handler.rewrite(full_path, replacements, is_dir_move=True)
                         self._write_cooldowns[full_path] = time.time() + 2.0

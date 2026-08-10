@@ -1,4 +1,3 @@
-# app/ui/dialogs/reports_dlg.py
 from typing import ClassVar
 
 from PySide6.QtGui import QColor
@@ -19,17 +18,12 @@ from app.config import UIConfig
 
 
 class AnalysisReportDialog(QDialog):
-    """
-    Dialog to display the project file analysis report.
-    Groups discovered files by predefined categories in a scrollable tree structure.
-    """
-
     EXT_CATEGORIES: ClassVar[dict[str, set[str]]] = {
         "Textures": {".dds", ".tif", ".tiff", ".png", ".jpg", ".tga"},
         "Models": {".cgf", ".cga", ".chr", ".skin", ".fbx", ".obj"},
         "Scripts": {".lua", ".xml", ".mtl", ".json", ".cfg", ".ini"},
         "Audio": {".wav", ".ogg", ".mp3", ".fsb", ".fdp"},
-        "Other": {},
+        "Other": set(),
     }
 
     def __init__(self, parent, header_text: str, prepared_data: dict):
@@ -39,12 +33,10 @@ class AnalysisReportDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        # Header Info Label
         self.header_lbl = QLabel(header_text)
         self.header_lbl.setStyleSheet("font-weight: bold; font-size: 13px;")
         layout.addWidget(self.header_lbl)
 
-        # Tree Widget (provides built-in scrolling)
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Category / Extension", "Files Count"])
         self.tree.setFont(UIConfig.FONT_MONOSPACE)
@@ -53,7 +45,6 @@ class AnalysisReportDialog(QDialog):
 
         self._populate(prepared_data)
 
-        # Bottom Button Bar (Copy Report + Close)
         btn_layout = QHBoxLayout()
 
         self.copy_btn = QPushButton("Copy Report")
@@ -69,10 +60,6 @@ class AnalysisReportDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def _populate(self, prepared_data: dict):
-        """
-        Populates the tree items. Handles both structured dictionary inputs
-        and plain text fallback conversions.
-        """
         self.tree.clear()
 
         for cat in self.EXT_CATEGORIES:
@@ -80,12 +67,10 @@ class AnalysisReportDialog(QDialog):
             if not content:
                 continue
 
-            # Create Category Parent Node
             cat_item = QTreeWidgetItem([cat, ""])
             cat_item.setForeground(0, QColor(UIConfig.COLOR_INFO))
             self.tree.addTopLevelItem(cat_item)
 
-            # Dictionary payload (clean and preferred format)
             if isinstance(content, dict):
                 total_count = sum(content.values())
                 sorted_items = sorted(content.items(), key=lambda x: x[1], reverse=True)
@@ -94,7 +79,6 @@ class AnalysisReportDialog(QDialog):
                     cat_item.addChild(ext_item)
                 cat_item.setText(1, f"Total: {total_count}")
 
-            # String payload (legacy fallback parsing)
             elif isinstance(content, str):
                 lines = [line.strip() for line in content.strip().split("\n") if line.strip()]
                 total_count = 0
@@ -113,7 +97,6 @@ class AnalysisReportDialog(QDialog):
         self.tree.expandAll()
 
     def _copy_to_clipboard(self):
-        """Formats the current tree contents to a structured string and copies it to clipboard."""
         lines = [self.header_lbl.text(), "=" * 50]
 
         root = self.tree.invisibleRootItem()

@@ -1,4 +1,3 @@
-# app/ui/dialogs/texture_dlg.py
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QApplication,
@@ -19,11 +18,6 @@ from app.config import UIConfig
 
 
 class TextureReportDialog(QDialog):
-    """
-    Dialog to display results of the Texture Validator task.
-    Features tabs for Outdated and Missing textures.
-    """
-
     def __init__(self, parent, results: dict):
         super().__init__(parent)
         self.setWindowTitle("Texture Validation Report")
@@ -32,12 +26,10 @@ class TextureReportDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        # Summary Label
         summary_lbl = QLabel(results.get("summary", ""))
         summary_lbl.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(summary_lbl)
 
-        # Tabs
         self.tabs = QTabWidget()
 
         self.tab_outdated = self._create_list_tab(
@@ -55,7 +47,6 @@ class TextureReportDialog(QDialog):
 
         layout.addWidget(self.tabs)
 
-        # Buttons
         btn_layout = QHBoxLayout()
         copy_btn = QPushButton("Copy Current List")
         copy_btn.clicked.connect(self._copy_current)
@@ -69,7 +60,6 @@ class TextureReportDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def _create_list_tab(self, data: list, title: str, color_hex: str) -> QWidget:
-        """Helper to create a tab page with a tree widget."""
         widget = QWidget()
         vbox = QVBoxLayout(widget)
 
@@ -89,15 +79,16 @@ class TextureReportDialog(QDialog):
         return widget
 
     def _copy_current(self):
-        """Copies the contents of the currently active list to clipboard."""
         current_widget = self.tabs.currentWidget()
-        # Find the QTreeWidget inside the current tab page
+        if not current_widget:
+            return
+
         tree = current_widget.findChild(QTreeWidget)
 
         if not tree or tree.topLevelItemCount() == 0:
             return
 
-        lines = [tree.topLevelItem(i).text(0) for i in range(tree.topLevelItemCount())]
+        lines = [item.text(0) for i in range(tree.topLevelItemCount()) if (item := tree.topLevelItem(i))]
 
         QApplication.clipboard().setText("\n".join(lines))
         QMessageBox.information(self, "Copied", f"Copied {len(lines)} paths to clipboard.")

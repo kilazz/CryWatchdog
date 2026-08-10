@@ -1,4 +1,3 @@
-# app/ui/dialogs/packer_dlg.py
 from PySide6.QtWidgets import (
     QDialog,
     QGroupBox,
@@ -62,6 +61,6 @@ class PackerDialog(QDialog):
         src, out = self.unpack_src.get_path(), self.unpack_out.get_path()
         if not (src and out):
             return
-        if QMessageBox.question(self, "Confirm", "Overwrite existing?") == QMessageBox.Yes:
+        if QMessageBox.question(self, "Confirm", "Overwrite existing?") == QMessageBox.StandardButton.Yes:
             self.main_window.run_task(lambda: AssetUnpacker(src, out, self.main_window.core_signals).run())
             self.accept()

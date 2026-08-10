@@ -1,4 +1,3 @@
-# app/services/watcher.py
 import difflib
 import logging
 import threading
@@ -11,6 +10,8 @@ from watchfiles import Change, watch
 from app.config import AppConfig
 from app.services.asset_handlers import ASSET_HANDLERS
 from app.services.index import AssetReferenceIndex
+
+logger = logging.getLogger(__name__)
 
 
 class WatcherOptions(TypedDict, total=False):
@@ -56,11 +57,11 @@ class WatcherService:
             self.signals.indexingFinished.emit()
 
             mode_str = "[DRY RUN ENABLED]" if options.get("dry_run") else "[LIVE MODE]"
-            logging.info(f"Watchfiles started on: {self.settings['project_root']} {mode_str}")
+            logger.info(f"Watchfiles started on: {self.settings['project_root']} {mode_str}")
 
             container_exts = tuple(ASSET_HANDLERS.keys())
             tracked_exts = AppConfig.TRACKED_ASSET_EXTENSIONS
-            _last_deleted = []  # list of (path, time)
+            _last_deleted = []
 
             for changes in watch(str(self.settings["project_root"]), stop_event=self.stop_event):
                 added_paths = []
@@ -77,31 +78,25 @@ class WatcherService:
                         modified_paths.append(path)
 
                 current_time = time.time()
-                # Clean up old deleted paths (> 1.0s)
                 _last_deleted = [(p, t) for p, t in _last_deleted if current_time - t < 1.0]
 
-                # Add new deleted paths to the tracking list
                 for p in deleted_paths:
                     _last_deleted.append((p, current_time))
 
-                # Detect Renames
                 renames = []
                 for added in added_paths[:]:
                     matching_deleted = None
 
-                    # 1. Try to find a deleted file with the exact same name (Move to different folder)
                     exact_name_matches = [p for p, t in _last_deleted if p.name == added.name]
 
                     if exact_name_matches:
                         matching_deleted = exact_name_matches[0]
                     else:
-                        # 2. Try to find a deleted file in the same directory (Rename in same folder)
                         candidates = [p for p, t in _last_deleted if p.parent == added.parent]
 
                         if len(candidates) == 1:
                             matching_deleted = candidates[0]
                         elif len(candidates) > 1:
-                            # Multiple candidates, find the most similar filename
                             best_match = None
                             best_ratio = 0.0
                             for c in candidates:
@@ -111,21 +106,18 @@ class WatcherService:
                                     best_match = c
                             matching_deleted = best_match
                         elif len(_last_deleted) == 1 and len(added_paths) == 1:
-                            # 3. Exactly 1 deleted and 1 added recently, assume rename/move
                             matching_deleted = _last_deleted[0][0]
 
                     if matching_deleted:
                         renames.append((matching_deleted, added))
-                        # Remove from tracking
                         _last_deleted = [(p, t) for p, t in _last_deleted if p != matching_deleted]
                         added_paths.remove(added)
                         if matching_deleted in deleted_paths:
                             deleted_paths.remove(matching_deleted)
 
                 for old_path, new_path in renames:
-                    logging.info(f"Detected rename: {old_path.name} -> {new_path.name}")
+                    logger.info(f"Detected rename: {old_path.name} -> {new_path.name}")
                     if old_path.is_dir() or new_path.is_dir() or not old_path.suffix:
-                        # It might be a directory rename
                         index.handle_directory_move(old_path, new_path)
                     elif old_path.suffix.lower() in tracked_exts:
                         index.update_asset_path(old_path, new_path)
@@ -143,8 +135,8 @@ class WatcherService:
                         index.remove_container_from_index(path)
 
         except Exception as e:
-            logging.error(f"Critical watcher error: {e}", exc_info=True)
+            logger.error(f"Critical watcher error: {e}", exc_info=True)
             self.signals.criticalError.emit("Watcher Error", f"{e}")
         finally:
-            logging.info("Watcher thread terminated.")
+            logger.info("Watcher thread terminated.")
             self.signals.watcherStopped.emit()

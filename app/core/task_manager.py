@@ -7,6 +7,8 @@ from PySide6.QtWidgets import QMessageBox
 from app.config import AppState
 from app.core.worker import Worker
 
+logger = logging.getLogger(__name__)
+
 
 class TaskManager(QObject):
     stateChanged = Signal(AppState)
@@ -42,7 +44,7 @@ class TaskManager(QObject):
                 if callback:
                     callback(res)
             except Exception as e:
-                logging.error(f"Error in task callback: {e}")
+                logger.error(f"Error in task callback: {e}")
                 traceback.print_exc()
                 if self.parent_widget:
                     QMessageBox.critical(

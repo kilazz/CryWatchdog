@@ -1,16 +1,19 @@
-# app/tasks/cleaner.py
+from __future__ import annotations
+
 import os
 import re
 import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from pathlib import Path
-from typing import TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import charset_normalizer
 
 from app.config import AppConfig, CleanupStatus
 from app.core.utils import atomic_write, find_files_by_extensions, normalize_path
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class CleanerOptions(TypedDict, total=False):
@@ -24,7 +27,7 @@ class CleanerOptions(TypedDict, total=False):
     newline_type_label: str
 
 
-def _cleaner_process_file_worker(file_path: Path, options: CleanerOptions) -> tuple[CleanupStatus, str]:
+def _cleaner_process_file_worker(file_path: Path, options: dict[str, Any]) -> tuple[CleanupStatus, str]:
     try:
         original_bytes = file_path.read_bytes()
         if not original_bytes:
@@ -93,7 +96,7 @@ def _cleaner_process_file_worker(file_path: Path, options: CleanerOptions) -> tu
                 "CR (Classic Mac OS)": "\r",
             }
             label = options.get("newline_type_label")
-            final_newline = newline_map.get(label, "\r\n")
+            final_newline = newline_map.get(label, "\r\n") if label else "\r\n"
 
             processed_text_lf = processed_text.replace("\r\n", "\n").replace("\r", "\n")
             text_for_comparison = processed_text_lf.replace("\n", final_newline)
@@ -119,7 +122,7 @@ class ProjectCleaner:
     def __init__(self, project_root: Path, signals):
         self.project_root, self.signals = project_root, signals
 
-    def run(self, **options: bool) -> dict:
+    def run(self, **options: Any) -> dict:
         start_time = time.time()
         files_to_process = find_files_by_extensions(self.project_root, tuple(AppConfig.HANDLED_TEXT_EXTENSIONS))
         if not files_to_process:

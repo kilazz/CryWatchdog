@@ -1,4 +1,3 @@
-# app/config.py
 import json
 import logging
 import sys
@@ -9,29 +8,21 @@ from typing import ClassVar
 
 from PySide6.QtGui import QFont
 
+logger = logging.getLogger(__name__)
+
 
 class AppConfig:
-    """
-    Encapsulates all core application configurations and constants.
-    Loads settings from 'config.json' if available, otherwise uses defaults.
-    """
+    """Encapsulates all core application configurations and constants."""
 
-    # --- Path Configuration ---
-    # Determine if we are running as a script or a frozen PyInstaller EXE.
-    # If frozen, resources are in sys._MEIPASS. If dev, root is 2 levels up.
-    PROJECT_ROOT = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
-
-    # Path to external tools (luac.exe, stylua.exe)
+    PROJECT_ROOT = (
+        Path(getattr(sys, "_MEIPASS", "")) if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
+    )
     TOOLS_DIR = PROJECT_ROOT / "bin"
-
-    # Path to the external user configuration file (kept next to the main executable/script)
     CONFIG_FILE = Path("config.json")
 
-    # --- Tool Paths ---
     LUA_COMPILER_PATH = TOOLS_DIR / "luac55.exe"
     STYLUA_PATH = TOOLS_DIR / "stylua.exe"
 
-    # --- Default Constants (Fallback) ---
     DEFAULT_TEXTURE_EXTS: ClassVar[set[str]] = {
         ".dds",
         ".tif",
@@ -70,21 +61,14 @@ class AppConfig:
         ".adb",
     ]
 
-    # --- Mutable Runtime Configurations ---
-    # These are loaded from JSON or initialized with defaults.
     TEXTURE_EXTENSIONS: ClassVar[set[str]] = set(DEFAULT_TEXTURE_EXTS)
     TRACKED_ASSET_EXTENSIONS: ClassVar[list[str]] = list(DEFAULT_TRACKED_EXTS)
 
-    # --- Static / Hardcoded Configurations ---
     HANDLED_TEXT_EXTENSIONS: ClassVar[set[str]] = {".mtl", ".xml", ".lay", ".lyr", ".cdf", ".lua"}
     XML_EXTENSIONS: ClassVar[set[str]] = {".mtl", ".xml", ".lay", ".lyr", ".cdf"}
 
     @classmethod
     def load(cls):
-        """
-        Attempts to load configuration from config.json.
-        Updates TEXTURE_EXTENSIONS and TRACKED_ASSET_EXTENSIONS if successful.
-        """
         if not cls.CONFIG_FILE.exists():
             return
 
@@ -92,42 +76,34 @@ class AppConfig:
             with open(cls.CONFIG_FILE, encoding="utf-8") as f:
                 data = json.load(f)
 
-                # Update Textures (convert list to set for O(1) lookups)
                 if "textures" in data:
                     cls.TEXTURE_EXTENSIONS = set(data["textures"])
 
-                # Update Tracked Assets
                 if "tracked" in data:
                     cls.TRACKED_ASSET_EXTENSIONS = list(data["tracked"])
 
-            logging.info(f"Configuration loaded from {cls.CONFIG_FILE}")
+            logger.info(f"Configuration loaded from {cls.CONFIG_FILE}")
         except Exception as e:
-            logging.error(f"Failed to load config.json, using defaults. Error: {e}")
+            logger.error(f"Failed to load config.json, using defaults. Error: {e}")
 
     @classmethod
     def save(cls):
-        """
-        Saves the current configuration to config.json.
-        """
         data = {
-            "textures": sorted(list(cls.TEXTURE_EXTENSIONS)),
+            "textures": sorted(cls.TEXTURE_EXTENSIONS),
             "tracked": cls.TRACKED_ASSET_EXTENSIONS,
         }
         try:
             with open(cls.CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4)
-            logging.info(f"Configuration saved to {cls.CONFIG_FILE}")
+            logger.info(f"Configuration saved to {cls.CONFIG_FILE}")
         except Exception as e:
-            logging.error(f"Failed to save config.json: {e}")
+            logger.error(f"Failed to save config.json: {e}")
 
 
-# Automatically load config when module is imported
 AppConfig.load()
 
 
 class UIConfig:
-    """Encapsulates UI-specific constants like colors, fonts, and text."""
-
     FONT_MONOSPACE = QFont("Consolas", 10)
     COLOR_SUCCESS = "#66BB6A"
     COLOR_ERROR = "#E57373"
@@ -138,8 +114,6 @@ class UIConfig:
 
 
 class AppState(Enum):
-    """Defines the possible operational states of the application."""
-
     IDLE = auto()
     INDEXING = auto()
     WATCHING = auto()
@@ -148,15 +122,12 @@ class AppState(Enum):
 
 
 class CleanupStatus(Enum):
-    """Represents the outcome of a file cleanup operation."""
-
     MODIFIED = auto()
     UNCHANGED = auto()
     SKIPPED = auto()
     ERROR = auto()
 
 
-# Custom named tuple for structured Lua analysis results
 LuaFileAnalysisResult = namedtuple(
     "LuaFileAnalysisResult",
     ["relative_path", "is_syntax_ok", "message", "encoding", "status"],

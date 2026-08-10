@@ -3,113 +3,111 @@ setlocal EnableDelayedExpansion
 title CryWatchdog Launcher
 
 :: ============================================================================
-:: This script automatically sets up a virtual environment, installs the
-:: required dependencies from pyproject.toml, and runs the application.
+:: CryWatchdog Launcher Script (Powered by uv)
 ::
 :: USAGE:
-::   run.bat          - Creates environment if needed and runs the app.
-::   run.bat reinstall  - Deletes the old environment and does a fresh install.
+::   run.bat           - Standard launch (creates/updates environment and runs).
+::   run.bat reinstall - Deletes .venv and performs a clean reinstall.
 :: ============================================================================
 
-:: --- Configuration ---
 cd /d "%~dp0"
+
+:: --- Configuration ---
 set "VENV_DIR=.venv"
-set "PYTHON_EXE=python"
 set "ENTRY_SCRIPT=main.py"
 set "REQUIREMENTS_FILE=pyproject.toml"
-
-:: !!! UPDATED: Tools are now in the bin folder !!!
 set "TOOLS_DIR=bin"
 set "LUA_COMPILER=%TOOLS_DIR%\luac55.exe"
 set "LUA_FORMATTER=%TOOLS_DIR%\stylua.exe"
 
-:: --- Argument Parsing ---
+:: --- Parse Arguments ---
 set "REINSTALL_MODE=0"
-if /i "%1"=="reinstall" (
-    set "REINSTALL_MODE=1"
-    echo ** REINSTALL MODE ACTIVATED: The environment will be rebuilt. **
-    echo.
-)
+if /i "%~1"=="reinstall" set "REINSTALL_MODE=1"
+if /i "%~1"=="clean" set "REINSTALL_MODE=1"
 
-:: --- Header ---
 echo =======================================================
 echo              CryWatchdog Launcher
 echo =======================================================
 echo.
 
+if "!REINSTALL_MODE!"=="1" (
+    echo ** REINSTALL MODE ACTIVATED: The environment will be rebuilt. **
+    echo.
+)
+
 :: --- [1/4] Verifying Required Project Files ---
-echo [1/4] Verifying required files...
+echo [1/4] Verifying required project files...
+
 if not exist "%ENTRY_SCRIPT%" (
     set "ERROR_MESSAGE=Main script '%ENTRY_SCRIPT%' not found."
     goto :error
 )
+
 if not exist "%REQUIREMENTS_FILE%" (
-    set "ERROR_MESSAGE=Project file '%REQUIREMENTS_FILE%' not found. Cannot install dependencies."
+    set "ERROR_MESSAGE=Project configuration file '%REQUIREMENTS_FILE%' not found."
     goto :error
 )
 
-:: Check for tools in the BIN folder
 if not exist "%LUA_COMPILER%" (
-    set "ERROR_MESSAGE=Lua compiler not found at '%LUA_COMPILER%'. Please place 'luac55.exe' inside the '%TOOLS_DIR%' folder."
-    goto :error
-)
-if not exist "%LUA_FORMATTER%" (
-    set "ERROR_MESSAGE=Lua formatter not found at '%LUA_FORMATTER%'. Please place 'stylua.exe' inside the '%TOOLS_DIR%' folder."
+    set "ERROR_MESSAGE=Lua compiler not found at '%LUA_COMPILER%'. Please place 'luac55.exe' inside the '%TOOLS_DIR%' directory."
     goto :error
 )
 
-echo [OK] All required files are present.
+if not exist "%LUA_FORMATTER%" (
+    set "ERROR_MESSAGE=Lua formatter not found at '%LUA_FORMATTER%'. Please place 'stylua.exe' inside the '%TOOLS_DIR%' directory."
+    goto :error
+)
+
+echo [OK] All required project files are present.
 echo.
 
-:: --- [2/4] Setting Up Virtual Environment ---
+:: --- [2/4] Verifying / Installing UV Package Manager ---
+echo [2/4] Checking for 'uv' package manager...
+
+where uv >nul 2>nul
+if !errorlevel! neq 0 (
+    echo 'uv' was not found in PATH. Installing uv automatically...
+    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+    :: Add standard uv install locations to current session PATH
+    set "PATH=%USERPROFILE%\.cargo\bin;%USERPROFILE%\.local\bin;%USERPROFILE%\.bin;%PATH%"
+
+    where uv >nul 2>nul
+    if !errorlevel! neq 0 (
+        set "ERROR_MESSAGE=Failed to locate 'uv' after installation. Please install it manually: https://github.com/astral-sh/uv"
+        goto :error
+    )
+)
+
+echo [OK] 'uv' package manager is ready.
+echo.
+
+:: --- [3/4] Virtual Environment & Dependencies ---
 if "!REINSTALL_MODE!"=="1" (
     if exist "%VENV_DIR%" (
-        echo [2/4] Reinstall mode: Deleting existing virtual environment...
+        echo [3/4] Reinstall mode: Removing existing virtual environment '%VENV_DIR%'...
         rmdir /s /q "%VENV_DIR%"
         if !errorlevel! neq 0 (
-            set "ERROR_MESSAGE=Could not delete the '%VENV_DIR%' directory. Check for file locks."
+            set "ERROR_MESSAGE=Failed to delete '%VENV_DIR%'. Ensure no running processes are locking its files."
             goto :error
         )
     )
 )
 
-set "NEEDS_INSTALL=0"
-if not exist "%VENV_DIR%\Scripts\activate.bat" (
-    echo [2/4] Creating Python virtual environment in '%VENV_DIR%'...
-    %PYTHON_EXE% -m venv %VENV_DIR%
-    if !errorlevel! neq 0 (
-        set "ERROR_MESSAGE=Failed to create the virtual environment. Ensure Python is installed and in your PATH."
-        goto :error
-    )
-    set "NEEDS_INSTALL=1"
-) else (
-    echo [2/4] Virtual environment already exists.
+echo [3/4] Synchronizing virtual environment and dependencies with uv...
+uv venv %VENV_DIR% --quiet
+if !errorlevel! neq 0 (
+    set "ERROR_MESSAGE=Failed to create virtual environment using uv."
+    goto :error
 )
 
-echo Activating virtual environment...
-set "PATH=%CD%\%VENV_DIR%\Scripts;%PATH%"
-echo [OK] Virtual environment is active.
-echo.
-
-:: --- [3/4] Installing Dependencies ---
-set "SHOULD_INSTALL=0"
-if "!NEEDS_INSTALL!"=="1" set "SHOULD_INSTALL=1"
-if "!REINSTALL_MODE!"=="1" set "SHOULD_INSTALL=1"
-
-if "!SHOULD_INSTALL!"=="1" (
-    echo [3/4] Installing dependencies from '%REQUIREMENTS_FILE%'... This may take a moment.
-    pip install --upgrade pip
-
-    echo --- Installing project...
-    pip install .
-    if !errorlevel! neq 0 (
-        set "ERROR_MESSAGE=Failed to install dependencies from '%REQUIREMENTS_FILE%'. Check your internet connection and the file's contents."
-        goto :error
-    )
-) else (
-    echo [3/4] Dependencies appear to be installed. Skipping installation.
+uv pip install -e . --quiet
+if !errorlevel! neq 0 (
+    set "ERROR_MESSAGE=Failed to install project dependencies from '%REQUIREMENTS_FILE%'."
+    goto :error
 )
-echo [OK] Dependencies are ready.
+
+echo [OK] Virtual environment and dependencies are ready.
 echo.
 
 :: --- [4/4] Launching Application ---
@@ -118,9 +116,9 @@ echo [4/4] Starting CryWatchdog...
 echo =======================================================
 echo.
 
-python "%ENTRY_SCRIPT%"
+uv run python "%ENTRY_SCRIPT%"
 if !errorlevel! neq 0 (
-    set "ERROR_MESSAGE=The application exited with an error. Please check the console output above."
+    set "ERROR_MESSAGE=The application exited with an error. Please check the console log above."
     goto :error
 )
 

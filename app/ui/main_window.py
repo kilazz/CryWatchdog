@@ -1,4 +1,3 @@
-# app/ui/main_window.py
 import logging
 from collections import defaultdict
 from pathlib import Path
@@ -23,9 +22,7 @@ from PySide6.QtWidgets import (
 from app.config import AppState, UIConfig
 from app.core.signals import CoreSignals
 from app.core.task_manager import TaskManager
-from app.services.watcher import WatcherService
-
-# Tasks
+from app.services.watcher import WatcherOptions, WatcherService, WatcherSettings
 from app.tasks.analyzer import ProjectAnalyzer
 from app.tasks.cleaner import ProjectCleaner
 from app.tasks.converter import ProjectConverter
@@ -33,8 +30,6 @@ from app.tasks.duplicates import DuplicateFinder
 from app.tasks.finding import MissingAssetFinder, UnusedAssetFinder
 from app.tasks.texture_validator import TextureValidator
 from app.tasks.tod import TimeOfDayConverter
-
-# Dialogs
 from app.ui.dialogs.cleaner_dlg import CleanerDialog
 from app.ui.dialogs.duplicates_dlg import DuplicateFinderDialog
 from app.ui.dialogs.finding_dlg import MissingAssetsDialog, UnusedAssetsDialog
@@ -44,14 +39,16 @@ from app.ui.dialogs.reports_dlg import AnalysisReportDialog
 from app.ui.dialogs.texture_dlg import TextureReportDialog
 from app.ui.dialogs.tod_dlg import TimeOfDayDialog
 
+logger = logging.getLogger(__name__)
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("CryWatchdog")
         self.setGeometry(100, 100, 1100, 700)
-        self.project_root = None
-        self.watcher_service = None
+        self.project_root: Path | None = None
+        self.watcher_service: WatcherService | None = None
         self.state = AppState.IDLE
         self.core_signals = CoreSignals()
         self.task_manager = TaskManager(self)
@@ -65,14 +62,12 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(w)
         layout = QVBoxLayout(w)
 
-        # --- Top Bar ---
         top = QHBoxLayout()
         self.btn_sel = QPushButton("Select Folder")
         self.btn_proj = QPushButton("Project")
         self.btn_util = QPushButton("Utils")
         self.lbl_status = QLabel("Select a project folder.")
 
-        # Project Menu
         m_proj = QMenu(self)
         m_proj.addAction("Analyze...").triggered.connect(self._analyze)
         m_proj.addAction("Validate Textures...").triggered.connect(self._validate_textures)
@@ -86,7 +81,6 @@ class MainWindow(QMainWindow):
         m_proj.addAction("To Lowercase...").triggered.connect(self._convert_lc)
         self.btn_proj.setMenu(m_proj)
 
-        # Utils Menu
         m_util = QMenu(self)
         m_util.addAction("Packer...").triggered.connect(self._pack)
         m_util.addSeparator()
@@ -101,7 +95,6 @@ class MainWindow(QMainWindow):
         top.addWidget(self.lbl_status)
         layout.addLayout(top)
 
-        # --- Watcher Group ---
         grp = QGroupBox("Real-time Watchdog")
         gl = QVBoxLayout(grp)
         ol = QHBoxLayout()
@@ -123,18 +116,15 @@ class MainWindow(QMainWindow):
         gl.addWidget(self.btn_watch)
         layout.addWidget(grp)
 
-        # --- Log View ---
         self.log = QTextEdit()
         self.log.setReadOnly(True)
         self.log.setFont(UIConfig.FONT_MONOSPACE)
         layout.addWidget(self.log)
 
-        # --- Status Bar ---
         self.pbar = QProgressBar()
         self.statusBar().addPermanentWidget(self.pbar)
         self.pbar.hide()
 
-        # Connect top-level buttons
         self.btn_sel.clicked.connect(self._select_folder)
         self.btn_watch.clicked.connect(self._toggle_watch)
         self.opts["show_detailed_log"].stateChanged.connect(self._toggle_log)
@@ -165,7 +155,6 @@ class MainWindow(QMainWindow):
         self.btn_watch.setText(txt)
         self.lbl_status.setStyleSheet(f"color: {col}")
 
-        # Watcher button logic
         if s in [AppState.WATCHING, AppState.INDEXING] or (s == AppState.IDLE and has_proj):
             self.btn_watch.setEnabled(True)
         else:
@@ -180,21 +169,25 @@ class MainWindow(QMainWindow):
         d = QFileDialog.getExistingDirectory(self, "Project Root")
         if d:
             self.project_root = Path(d)
-            logging.info(f"Selected: {d}")
+            logger.info(f"Selected: {d}")
             self._set_state(AppState.IDLE)
 
     def _toggle_watch(self):
         if self.state in [AppState.WATCHING, AppState.INDEXING]:
             if self.watcher_service:
                 self.watcher_service.stop()
-        elif self.project_root:
-            opts = {k: v.isChecked() for k, v in self.opts.items()}
-            self.watcher_service = WatcherService(
-                {"project_root": self.project_root, "watcher_options": opts}, self.core_signals
-            )
+        elif self.project_root is not None:
+            opts: WatcherOptions = {
+                "match_any_texture_extension": self.opts["match_any_texture_extension"].isChecked(),
+                "allow_dir_change": self.opts["allow_dir_change"].isChecked(),
+                "dry_run": self.opts["dry_run"].isChecked(),
+            }
+            settings: WatcherSettings = {
+                "project_root": self.project_root,
+                "watcher_options": opts,
+            }
+            self.watcher_service = WatcherService(settings, self.core_signals)
             self.watcher_service.start()
-
-    # --- Actions ---
 
     def can_run_task(self, require_project=True):
         return self.task_manager.can_run_task(self.state, require_project, bool(self.project_root))
@@ -208,12 +201,13 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Done", res["summary"])
 
     def _clean(self):
-        if not self.can_run_task(require_project=True):
+        if not self.can_run_task(require_project=True) or self.project_root is None:
             return
+        project_root = self.project_root
         dlg = CleanerDialog(self)
         if dlg.exec():
             opts = dlg.get_options()
-            self.run_task(lambda: ProjectCleaner(self.project_root, self.core_signals).run(**opts), self._clean_done)
+            self.run_task(lambda: ProjectCleaner(project_root, self.core_signals).run(**opts), self._clean_done)
 
     def _clean_done(self, res):
         if not res:
@@ -226,11 +220,12 @@ class MainWindow(QMainWindow):
         msg.exec()
 
     def _convert_lc(self):
-        if not self.can_run_task(require_project=True):
+        if not self.can_run_task(require_project=True) or self.project_root is None:
             return
+        project_root = self.project_root
         msg = "This will irreversibly rename ALL files and folders in the project to lowercase.\n\nARE YOU SURE?"
         if QMessageBox.question(self, "Confirm Conversion", msg) == QMessageBox.StandardButton.Yes:
-            self.run_task(lambda: ProjectConverter(self.project_root, self.core_signals).run(), self.on_task_done)
+            self.run_task(lambda: ProjectConverter(project_root, self.core_signals).run(), self.on_task_done)
 
     def _dupes(self):
         if not self.can_run_task(require_project=False):
@@ -241,7 +236,8 @@ class MainWindow(QMainWindow):
 
         if dlg.exec():
             ref, tgt = dlg.get_paths()
-            self.run_task(lambda: DuplicateFinder(self.core_signals).run(ref, tgt), self.on_task_done)
+            if ref and tgt:
+                self.run_task(lambda: DuplicateFinder(self.core_signals).run(ref, tgt), self.on_task_done)
 
     def _tod(self):
         if not self.can_run_task(require_project=False):
@@ -249,37 +245,35 @@ class MainWindow(QMainWindow):
         dlg = TimeOfDayDialog(self)
         if dlg.exec():
             f = dlg.get_file()
-            self.run_task(lambda: TimeOfDayConverter(self.core_signals).run(f), self.on_task_done)
+            if f:
+                self.run_task(lambda: TimeOfDayConverter(self.core_signals).run(f), self.on_task_done)
 
     def _analyze(self):
-        if not self.can_run_task(require_project=True):
+        if not self.can_run_task(require_project=True) or self.project_root is None:
             return
-        self.run_task(lambda: ProjectAnalyzer(self.project_root).run(), self._analyze_done)
+        project_root = self.project_root
+        self.run_task(lambda: ProjectAnalyzer(project_root).run(), self._analyze_done)
 
     def _analyze_done(self, res):
         if not res:
             return
 
-        # Map to track Category -> { Extension: Count }
         prep = defaultdict(dict)
 
-        logging.info("--- [ANALYSIS] Project File Distribution Report ---")
-        logging.info(f"Total files scanned: {res.get('total_files', 0)}")
-        logging.info(f"Scan duration: {res.get('duration', 0.0):.2f}s")
+        logger.info("--- [ANALYSIS] Project File Distribution Report ---")
+        logger.info(f"Total files scanned: {res.get('total_files', 0)}")
+        logger.info(f"Scan duration: {res.get('duration', 0.0):.2f}s")
 
         if "extensions_counter" in res:
-            # Sort format extensions by highest file count first
             sorted_extensions = sorted(res["extensions_counter"].items(), key=lambda x: x[1], reverse=True)
 
             for ext, count in sorted_extensions:
                 cat = next((c for c, e in AnalysisReportDialog.EXT_CATEGORIES.items() if ext in e), "Other")
                 prep[cat][ext] = count
-                # Log extensions to the rolling console text field
-                logging.info(f"  Extension: {ext:<12} | Count: {count}")
+                logger.info(f"  Extension: {ext:<12} | Count: {count}")
 
-        logging.info("--- [ANALYSIS] End of Report ---")
+        logger.info("--- [ANALYSIS] End of Report ---")
 
-        # Open updated dialog with structured category data
         dlg = AnalysisReportDialog(
             self,
             f"Total Files Scanned: {res.get('total_files', 0)} (Time: {res.get('duration', 0.0):.2f}s)",
@@ -288,26 +282,29 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _validate_textures(self):
-        if not self.can_run_task(require_project=True):
+        if not self.can_run_task(require_project=True) or self.project_root is None:
             return
+        project_root = self.project_root
         self.run_task(
-            lambda: TextureValidator(self.project_root, self.core_signals).run(),
+            lambda: TextureValidator(project_root, self.core_signals).run(),
             lambda r: TextureReportDialog(self, r).exec(),
         )
 
     def _unused(self):
-        if not self.can_run_task(require_project=True):
+        if not self.can_run_task(require_project=True) or self.project_root is None:
             return
+        project_root = self.project_root
         self.run_task(
-            lambda: UnusedAssetFinder(self.project_root, self.core_signals).run(),
+            lambda: UnusedAssetFinder(project_root, self.core_signals).run(),
             lambda r: UnusedAssetsDialog(self, r).exec(),
         )
 
     def _missing(self):
-        if not self.can_run_task(require_project=True):
+        if not self.can_run_task(require_project=True) or self.project_root is None:
             return
+        project_root = self.project_root
         self.run_task(
-            lambda: MissingAssetFinder(self.project_root, self.core_signals).run(),
+            lambda: MissingAssetFinder(project_root, self.core_signals).run(),
             lambda r: MissingAssetsDialog(self, r).exec(),
         )
 
@@ -320,8 +317,6 @@ class MainWindow(QMainWindow):
         if not self.can_run_task(require_project=True):
             return
         LuaToolkitDialog(self).exec()
-
-    # --- Slots ---
 
     @Slot(str)
     def append_log(self, msg):
@@ -339,7 +334,7 @@ class MainWindow(QMainWindow):
 
     @Slot(int)
     def _toggle_log(self, s):
-        logging.getLogger().setLevel(logging.DEBUG if s == Qt.Checked else logging.INFO)
+        logging.getLogger().setLevel(logging.DEBUG if s == Qt.CheckState.Checked.value else logging.INFO)
 
     def closeEvent(self, e):
         if self.watcher_service:

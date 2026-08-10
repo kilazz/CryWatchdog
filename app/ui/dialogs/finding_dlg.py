@@ -1,4 +1,3 @@
-# app/ui/dialogs/finding_dlg.py
 from collections import defaultdict
 from pathlib import Path
 
@@ -61,7 +60,11 @@ class UnusedAssetsDialog(QDialog):
 
     def _copy(self):
         text = "\n".join(
-            [self.list_widget.topLevelItem(i).text(0) for i in range(self.list_widget.topLevelItemCount())]
+            [
+                item.text(0)
+                for i in range(self.list_widget.topLevelItemCount())
+                if (item := self.list_widget.topLevelItem(i))
+            ]
         )
         QApplication.clipboard().setText(text)
         QMessageBox.information(self, "Copied", "Paths copied to clipboard.")

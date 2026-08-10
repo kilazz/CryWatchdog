@@ -1,8 +1,12 @@
-# app/tasks/analyzer.py
+from __future__ import annotations
+
 import os
 import time
 from collections import Counter
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class ProjectAnalyzer:
@@ -20,15 +24,12 @@ class ProjectAnalyzer:
             for _, _, files in os.walk(self.project_root):
                 for filename in files:
                     total_files += 1
-                    # Extract extension or use a placeholder for files without one
                     ext = os.path.splitext(filename)[1].lower()
                     if not ext:
                         ext = ".<no_ext>"
                     extensions_counter[ext] += 1
 
         except Exception as e:
-            # If an error occurs (e.g., PermissionError), return what we have so far
-            # plus the error message.
             return {
                 "total_files": total_files,
                 "duration": time.time() - start_time,
