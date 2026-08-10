@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=82.0.1"]
+requires = ["setuptools>=84.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -14,13 +14,15 @@ authors = [{ name = "kilazz"}]
 dependencies = [
     "PySide6>=6.11.1",
     "qdarkstyle>=3.2.3",
-    "charset-normalizer>=3.4.7",
-    "watchfiles>=1.1.1",
+    "charset-normalizer>=3.4.9",
+    "watchfiles>=1.2.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "ruff",
+    "pyright",
+    #zzz
     "snakeviz",
     "py-spy",
     "tabulate2",
