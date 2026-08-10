@@ -31,7 +31,9 @@ class XmlAssetHandler(AssetHandler):
     _EXT_PATTERN = "|".join(re.escape(ext) for ext in AppConfig.TRACKED_ASSET_EXTENSIONS)
 
     _BYTES_REGEX = re.compile(
-        rb'(?:File|Texture|filename|path|Material)\s*=\s*([\'"])([^"\']+(?:' + _EXT_PATTERN.encode("utf-8") + rb"))\1",
+        rb'(?:File|Texture\d*|filename|path|Material|Engine|Particle|LowSpecHolder)\s*=\s*([\'"])([^"\']+(?:'
+        + _EXT_PATTERN.encode("utf-8")
+        + rb"))\1",
         re.IGNORECASE,
     )
 
@@ -80,7 +82,7 @@ class XmlAssetHandler(AssetHandler):
                 return match.group(0)
 
             pattern_str = (
-                r"((?:File|Texture|filename|path|Material)\s*=\s*)"
+                r"((?:File|Texture\d*|filename|path|Material|Engine|Particle|LowSpecHolder)\s*=\s*)"
                 r'(["\'])'
                 r'([^"\']+(?:' + XmlAssetHandler._EXT_PATTERN + r"))"
                 r"\2"

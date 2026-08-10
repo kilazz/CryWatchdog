@@ -67,6 +67,14 @@ class AppConfig:
     HANDLED_TEXT_EXTENSIONS: ClassVar[set[str]] = {".mtl", ".xml", ".lay", ".lyr", ".cdf", ".lua"}
     XML_EXTENSIONS: ClassVar[set[str]] = {".mtl", ".xml", ".lay", ".lyr", ".cdf"}
 
+    PACKER_SETTINGS: ClassVar[dict[str, str]] = {
+        "pack_src": "",
+        "pack_out": "",
+        "pack_ext": ".lua, .xml, .txt, .cfg",
+        "unpack_src": "",
+        "unpack_out": "",
+    }
+
     @classmethod
     def load(cls):
         if not cls.CONFIG_FILE.exists():
@@ -82,6 +90,9 @@ class AppConfig:
                 if "tracked" in data:
                     cls.TRACKED_ASSET_EXTENSIONS = list(data["tracked"])
 
+                if "packer" in data and isinstance(data["packer"], dict):
+                    cls.PACKER_SETTINGS.update(data["packer"])
+
             logger.info(f"Configuration loaded from {cls.CONFIG_FILE}")
         except Exception as e:
             logger.error(f"Failed to load config.json, using defaults. Error: {e}")
@@ -91,6 +102,7 @@ class AppConfig:
         data = {
             "textures": sorted(cls.TEXTURE_EXTENSIONS),
             "tracked": cls.TRACKED_ASSET_EXTENSIONS,
+            "packer": cls.PACKER_SETTINGS,
         }
         try:
             with open(cls.CONFIG_FILE, "w", encoding="utf-8") as f:

@@ -4,7 +4,6 @@ import contextlib
 import logging
 import math
 import re
-import xml.dom.minidom
 import xml.etree.ElementTree as ET
 from typing import TYPE_CHECKING
 
@@ -137,14 +136,14 @@ class TimeOfDayConverter:
 
         return new_s
 
-    def _pretty_print_xml(self, elem):
-        xml_str = ET.tostring(elem, encoding="unicode")
-        pretty = xml.dom.minidom.parseString(xml_str).toprettyxml(indent=" ")
-        if pretty.startswith("<?xml"):
-            parts = pretty.split("\n", 1)
+    def _pretty_print_xml(self, elem: ET.Element) -> str:
+        ET.indent(elem, space="  ")
+        xml_str = ET.tostring(elem, encoding="utf-8").decode("utf-8")
+        if xml_str.startswith("<?xml"):
+            parts = xml_str.split("\n", 1)
             if len(parts) > 1:
                 return parts[1]
-        return pretty
+        return xml_str
 
     def _add_constants_block(self, env_preset):
         consts = ET.SubElement(env_preset, "Constants")

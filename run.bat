@@ -98,7 +98,7 @@ if not exist "%VENV_DIR%" (
     )
 )
 
-uv pip install -e . --quiet
+uv sync --quiet
 if !errorlevel! neq 0 (
     set "ERROR_MESSAGE=Failed to install dependencies from '%REQUIREMENTS_FILE%'."
     goto :error
