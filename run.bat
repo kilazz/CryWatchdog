@@ -2,13 +2,9 @@
 setlocal EnableDelayedExpansion
 title CryWatchdog Launcher
 
-:: ============================================================================
-:: CryWatchdog Launcher Script (Powered by uv)
-::
-:: USAGE:
-::   run.bat           - Standard launch (creates/updates environment and runs).
-::   run.bat reinstall - Deletes .venv and performs a clean reinstall.
-:: ============================================================================
+:: Suppress cross-drive hardlink warnings and disable interactive venv prompts
+set "UV_LINK_MODE=copy"
+set "UV_VENV_ALLOW_EXISTING=1"
 
 cd /d "%~dp0"
 
@@ -31,7 +27,7 @@ echo =======================================================
 echo.
 
 if "!REINSTALL_MODE!"=="1" (
-    echo ** REINSTALL MODE ACTIVATED: The environment will be rebuilt. **
+    echo ** REINSTALL MODE ACTIVATED: Virtual environment will be rebuilt. **
     echo.
 )
 
@@ -49,12 +45,12 @@ if not exist "%REQUIREMENTS_FILE%" (
 )
 
 if not exist "%LUA_COMPILER%" (
-    set "ERROR_MESSAGE=Lua compiler not found at '%LUA_COMPILER%'. Please place 'luac55.exe' inside the '%TOOLS_DIR%' directory."
+    set "ERROR_MESSAGE=Lua compiler not found at '%LUA_COMPILER%'. Please place 'luac55.exe' in the '%TOOLS_DIR%' directory."
     goto :error
 )
 
 if not exist "%LUA_FORMATTER%" (
-    set "ERROR_MESSAGE=Lua formatter not found at '%LUA_FORMATTER%'. Please place 'stylua.exe' inside the '%TOOLS_DIR%' directory."
+    set "ERROR_MESSAGE=Lua formatter not found at '%LUA_FORMATTER%'. Please place 'stylua.exe' in the '%TOOLS_DIR%' directory."
     goto :error
 )
 
@@ -69,12 +65,11 @@ if !errorlevel! neq 0 (
     echo 'uv' was not found in PATH. Installing uv automatically...
     powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 
-    :: Add standard uv install locations to current session PATH
     set "PATH=%USERPROFILE%\.cargo\bin;%USERPROFILE%\.local\bin;%USERPROFILE%\.bin;%PATH%"
 
     where uv >nul 2>nul
     if !errorlevel! neq 0 (
-        set "ERROR_MESSAGE=Failed to locate 'uv' after installation. Please install it manually: https://github.com/astral-sh/uv"
+        set "ERROR_MESSAGE=Failed to locate 'uv' after installation."
         goto :error
     )
 )
@@ -88,26 +83,28 @@ if "!REINSTALL_MODE!"=="1" (
         echo [3/4] Reinstall mode: Removing existing virtual environment '%VENV_DIR%'...
         rmdir /s /q "%VENV_DIR%"
         if !errorlevel! neq 0 (
-            set "ERROR_MESSAGE=Failed to delete '%VENV_DIR%'. Ensure no running processes are locking its files."
+            set "ERROR_MESSAGE=Failed to delete '%VENV_DIR%'. Ensure no processes are locking it."
             goto :error
         )
     )
 )
 
 echo [3/4] Synchronizing virtual environment and dependencies with uv...
-uv venv %VENV_DIR% --quiet
-if !errorlevel! neq 0 (
-    set "ERROR_MESSAGE=Failed to create virtual environment using uv."
-    goto :error
+if not exist "%VENV_DIR%" (
+    uv venv %VENV_DIR% --quiet
+    if !errorlevel! neq 0 (
+        set "ERROR_MESSAGE=Failed to create virtual environment with uv."
+        goto :error
+    )
 )
 
 uv pip install -e . --quiet
 if !errorlevel! neq 0 (
-    set "ERROR_MESSAGE=Failed to install project dependencies from '%REQUIREMENTS_FILE%'."
+    set "ERROR_MESSAGE=Failed to install dependencies from '%REQUIREMENTS_FILE%'."
     goto :error
 )
 
-echo [OK] Virtual environment and dependencies are ready.
+echo [OK] Virtual environment and dependencies are synchronized.
 echo.
 
 :: --- [4/4] Launching Application ---
@@ -118,7 +115,7 @@ echo.
 
 uv run python "%ENTRY_SCRIPT%"
 if !errorlevel! neq 0 (
-    set "ERROR_MESSAGE=The application exited with an error. Please check the console log above."
+    set "ERROR_MESSAGE=The application exited with an error. Check the console log above."
     goto :error
 )
 
