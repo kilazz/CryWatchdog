@@ -5,9 +5,13 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from app.core.utils import get_safe_rel_path
+from app.tasks.models import TextureValidatorResult
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -15,9 +19,9 @@ logger = logging.getLogger(__name__)
 class TextureValidator:
     SOURCE_EXTS: ClassVar[set[str]] = {".tif", ".tiff", ".png", ".tga", ".bmp", ".gif"}
 
-    def __init__(self, project_root: Path, signals):
+    def __init__(self, project_root: Path, progress_callback: Callable[[int, int], None] | None = None):
         self.project_root = project_root
-        self.signals = signals
+        self.progress_callback = progress_callback
 
     def _check_pair(self, source_path: Path) -> tuple[str, str] | None:
         try:
@@ -38,7 +42,7 @@ class TextureValidator:
 
         return None
 
-    def run(self) -> dict:
+    def run(self) -> TextureValidatorResult:
         logger.info("Starting Texture Validation scan...")
         start_time = time.time()
 
@@ -50,7 +54,7 @@ class TextureValidator:
                     source_files.append(path)
 
         if not source_files:
-            return {"summary": "No source textures found in project."}
+            return TextureValidatorResult(summary="No source textures found in project.")
 
         outdated = []
         missing = []
@@ -62,8 +66,8 @@ class TextureValidator:
             future_map = {executor.submit(self._check_pair, f): f for f in source_files}
 
             for i, future in enumerate(as_completed(future_map), 1):
-                if i % 50 == 0 or i == len(source_files):
-                    self.signals.progressUpdated.emit(i, len(source_files))
+                if (i % 50 == 0 or i == len(source_files)) and self.progress_callback:
+                    self.progress_callback(i, len(source_files))
 
                 try:
                     result = future.result()
@@ -85,9 +89,9 @@ class TextureValidator:
 
         logger.info(f"✅ {summary}")
 
-        return {
-            "summary": summary,
-            "outdated": sorted(outdated),
-            "missing": sorted(missing),
-            "duration": duration,
-        }
+        return TextureValidatorResult(
+            summary=summary,
+            outdated=sorted(outdated),
+            missing=sorted(missing),
+            duration=duration,
+        )

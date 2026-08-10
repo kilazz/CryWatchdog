@@ -4,20 +4,21 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING
 
+from app.tasks.models import ConverterResult
+
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
 class ProjectConverter:
-    """A task class for converting all project filenames to lowercase."""
-
-    def __init__(self, project_root: Path, signals):
+    def __init__(self, project_root: Path, progress_callback: Callable[[int, int], None] | None = None):
         self.project_root = project_root
-        self.signals = signals
+        self.progress_callback = progress_callback
 
-    def run(self) -> dict:
+    def run(self) -> ConverterResult:
         logger.info(f"Starting filename conversion in '{self.project_root}' to lowercase...")
         renamed_count = 0
         error_count = 0
@@ -25,7 +26,8 @@ class ProjectConverter:
         all_paths = list(self.project_root.rglob("*"))
 
         for i, path in enumerate(reversed(all_paths), 1):
-            self.signals.progressUpdated.emit(i, len(all_paths))
+            if self.progress_callback:
+                self.progress_callback(i, len(all_paths))
 
             if path.name == path.name.lower():
                 continue
@@ -52,4 +54,4 @@ class ProjectConverter:
 
         summary = f"Conversion complete. Renamed {renamed_count} items with {error_count} errors."
         logger.info(f"✅ {summary}")
-        return {"summary": summary}
+        return ConverterResult(summary=summary, renamed_count=renamed_count, error_count=error_count)

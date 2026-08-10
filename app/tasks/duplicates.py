@@ -4,13 +4,19 @@ import hashlib
 import logging
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+from app.tasks.models import DuplicateFinderResult
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
 
 class DuplicateFinder:
-    def __init__(self, signals):
-        self.signals = signals
+    def __init__(self, progress_callback: Callable[[int, int], None] | None = None):
+        self.progress_callback = progress_callback
 
     def _get_file_hash(self, filepath: Path) -> str | None:
         hasher = hashlib.md5()
@@ -23,11 +29,11 @@ class DuplicateFinder:
             logger.warning(f"Could not hash {filepath}: {e}")
             return None
 
-    def run(self, folder_ref: Path, folder_target: Path) -> dict:
+    def run(self, folder_ref: Path, folder_target: Path) -> DuplicateFinderResult:
         logger.info(f"Starting Duplicate Scan.\n  Reference: {folder_ref}\n  Target: {folder_target}")
 
         if folder_ref == folder_target:
-            return {"summary": "Error: Reference and Target folders cannot be the same."}
+            return DuplicateFinderResult(summary="Error: Reference and Target folders cannot be the same.")
 
         duplicates = []
         bytes_saved = 0
@@ -38,8 +44,8 @@ class DuplicateFinder:
         logger.info(f"Scanning {total_files} files in target against reference...")
 
         for i, path_b in enumerate(target_files, 1):
-            if i % 10 == 0:
-                self.signals.progressUpdated.emit(i, total_files)
+            if i % 10 == 0 and self.progress_callback:
+                self.progress_callback(i, total_files)
 
             try:
                 rel_path = path_b.relative_to(folder_target)
@@ -83,4 +89,9 @@ class DuplicateFinder:
         )
         logger.info(f"✅ {summary}")
 
-        return {"summary": summary, "duplicates": duplicates}
+        return DuplicateFinderResult(
+            summary=summary,
+            duplicates=duplicates,
+            removed_dirs=removed_dirs,
+            bytes_saved=bytes_saved,
+        )

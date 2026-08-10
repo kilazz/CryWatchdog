@@ -7,12 +7,10 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
-    QPushButton,
-    QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
 )
+from qfluentwidgets import InfoBar, PushButton, TreeWidget
 
 from app.config import UIConfig
 
@@ -37,7 +35,7 @@ class AnalysisReportDialog(QDialog):
         self.header_lbl.setStyleSheet("font-weight: bold; font-size: 13px;")
         layout.addWidget(self.header_lbl)
 
-        self.tree = QTreeWidget()
+        self.tree = TreeWidget()
         self.tree.setHeaderLabels(["Category / Extension", "Files Count"])
         self.tree.setFont(UIConfig.FONT_MONOSPACE)
         self.tree.setColumnWidth(0, 350)
@@ -47,7 +45,7 @@ class AnalysisReportDialog(QDialog):
 
         btn_layout = QHBoxLayout()
 
-        self.copy_btn = QPushButton("Copy Report")
+        self.copy_btn = PushButton("Copy Report")
         self.copy_btn.clicked.connect(self._copy_to_clipboard)
         btn_layout.addWidget(self.copy_btn)
 
@@ -109,4 +107,4 @@ class AnalysisReportDialog(QDialog):
 
         structured_text = "\n".join(lines)
         QApplication.clipboard().setText(structured_text)
-        QMessageBox.information(self, "Success", "Report copied to clipboard.")
+        InfoBar.success("Success", "Report copied to clipboard.", parent=self)

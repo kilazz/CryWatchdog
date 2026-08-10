@@ -11,8 +11,10 @@ import charset_normalizer
 
 from app.config import AppConfig, CleanupStatus
 from app.core.utils import atomic_write, find_files_by_extensions, normalize_path
+from app.tasks.models import CleanerResult
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 
@@ -119,14 +121,15 @@ def _cleaner_process_file_worker(file_path: Path, options: dict[str, Any]) -> tu
 
 
 class ProjectCleaner:
-    def __init__(self, project_root: Path, signals):
-        self.project_root, self.signals = project_root, signals
+    def __init__(self, project_root: Path, progress_callback: Callable[[int, int], None] | None = None):
+        self.project_root = project_root
+        self.progress_callback = progress_callback
 
-    def run(self, **options: Any) -> dict:
+    def run(self, **options: Any) -> CleanerResult:
         start_time = time.time()
         files_to_process = find_files_by_extensions(self.project_root, tuple(AppConfig.HANDLED_TEXT_EXTENSIONS))
         if not files_to_process:
-            return {"summary": "No target files found.", "failed_files": []}
+            return CleanerResult(summary="No target files found.")
 
         stats = Counter()
         failed_files = []
@@ -134,7 +137,8 @@ class ProjectCleaner:
         with ProcessPoolExecutor(max_workers=os.cpu_count() or 1) as executor:
             future_map = {executor.submit(_cleaner_process_file_worker, f, options): f for f in files_to_process}
             for i, future in enumerate(as_completed(future_map), 1):
-                self.signals.progressUpdated.emit(i, len(files_to_process))
+                if self.progress_callback:
+                    self.progress_callback(i, len(files_to_process))
                 file_path = future_map[future]
                 try:
                     status, msg = future.result()
@@ -152,4 +156,10 @@ class ProjectCleaner:
             f"  Files unchanged: {stats['unchanged']}\n"
             f"  Errors: {stats['error']}"
         )
-        return {"summary": summary, "failed_files": failed_files}
+        return CleanerResult(
+            summary=summary,
+            failed_files=failed_files,
+            modified_count=stats["modified"],
+            unchanged_count=stats["unchanged"],
+            error_count=stats["error"],
+        )

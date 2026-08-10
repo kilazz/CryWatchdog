@@ -6,10 +6,15 @@ import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app.config import AppConfig
 from app.core.utils import find_files_by_extensions
 from app.services.asset_handlers import ASSET_HANDLERS
+from app.tasks.models import MissingAssetResult, UnusedAssetResult
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +30,11 @@ def _parse_wrapper(file_path: Path):
 
 
 class UnusedAssetFinder:
-    def __init__(self, root: Path, signals):
+    def __init__(self, root: Path, progress_callback: Callable[[int, int], None] | None = None):
         self.root = root
-        self.signals = signals
+        self.progress_callback = progress_callback
 
-    def run(self) -> dict:
+    def run(self) -> UnusedAssetResult:
         start_time = time.time()
         logger.info("Indexing filesystem for unused assets...")
         assets = set()
@@ -64,8 +69,8 @@ class UnusedAssetFinder:
             future_map = {executor.submit(_parse_wrapper, f): f for f in containers}
 
             for i, future in enumerate(as_completed(future_map), 1):
-                if i % 20 == 0 or i == len(containers):
-                    self.signals.progressUpdated.emit(i, len(containers))
+                if (i % 20 == 0 or i == len(containers)) and self.progress_callback:
+                    self.progress_callback(i, len(containers))
 
                 try:
                     found_refs = future.result()
@@ -79,20 +84,20 @@ class UnusedAssetFinder:
         summary = f"Found {len(unused)} unused assets."
         duration = time.time() - start_time
 
-        return {
-            "summary": summary,
-            "unused_files": sorted(unused),
-            "total_assets": len(assets),
-            "duration": duration,
-        }
+        return UnusedAssetResult(
+            summary=summary,
+            unused_files=sorted(unused),
+            total_assets=len(assets),
+            duration=duration,
+        )
 
 
 class MissingAssetFinder:
-    def __init__(self, root: Path, signals):
+    def __init__(self, root: Path, progress_callback: Callable[[int, int], None] | None = None):
         self.root = root
-        self.signals = signals
+        self.progress_callback = progress_callback
 
-    def run(self) -> dict:
+    def run(self) -> MissingAssetResult:
         start_time = time.time()
         logger.info("Scanning for broken references...")
 
@@ -107,7 +112,8 @@ class MissingAssetFinder:
             future_map = {executor.submit(_parse_wrapper, f): f for f in containers}
 
             for i, future in enumerate(as_completed(future_map), 1):
-                self.signals.progressUpdated.emit(i, len(containers))
+                if self.progress_callback:
+                    self.progress_callback(i, len(containers))
 
                 container_path = future_map[future]
                 try:
@@ -135,9 +141,9 @@ class MissingAssetFinder:
         summary = f"Found {len(missing_map)} broken references."
         duration = time.time() - start_time
 
-        return {
-            "summary": summary,
-            "missing_map": dict(missing_map),
-            "duration": duration,
-            "total_scanned": len(containers),
-        }
+        return MissingAssetResult(
+            summary=summary,
+            missing_map=dict(missing_map),
+            total_scanned=len(containers),
+            duration=duration,
+        )

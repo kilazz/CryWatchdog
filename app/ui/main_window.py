@@ -1,43 +1,31 @@
 import logging
-from collections import defaultdict
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
-    QCheckBox,
     QFileDialog,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMenu,
-    QMessageBox,
-    QProgressBar,
-    QPushButton,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
+from qfluentwidgets import (
+    CardWidget,
+    CheckBox,
+    InfoBar,
+    InfoBarPosition,
+    ProgressBar,
+    PushButton,
+    TextEdit,
+)
 
 from app.config import AppState, UIConfig
+from app.controllers.project_controller import ProjectController
 from app.core.signals import CoreSignals
 from app.core.task_manager import TaskManager
 from app.services.watcher import WatcherOptions, WatcherService, WatcherSettings
-from app.tasks.analyzer import ProjectAnalyzer
-from app.tasks.cleaner import ProjectCleaner
-from app.tasks.converter import ProjectConverter
-from app.tasks.duplicates import DuplicateFinder
-from app.tasks.finding import MissingAssetFinder, UnusedAssetFinder
-from app.tasks.texture_validator import TextureValidator
-from app.tasks.tod import TimeOfDayConverter
-from app.ui.dialogs.cleaner_dlg import CleanerDialog
-from app.ui.dialogs.duplicates_dlg import DuplicateFinderDialog
-from app.ui.dialogs.finding_dlg import MissingAssetsDialog, UnusedAssetsDialog
-from app.ui.dialogs.lua_dlg import LuaToolkitDialog
-from app.ui.dialogs.packer_dlg import PackerDialog
-from app.ui.dialogs.reports_dlg import AnalysisReportDialog
-from app.ui.dialogs.texture_dlg import TextureReportDialog
-from app.ui.dialogs.tod_dlg import TimeOfDayDialog
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +40,7 @@ class MainWindow(QMainWindow):
         self.state = AppState.IDLE
         self.core_signals = CoreSignals()
         self.task_manager = TaskManager(self)
+        self.controller = ProjectController(self)
 
         self._init_ui()
         self._connect_core()
@@ -63,29 +52,29 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(w)
 
         top = QHBoxLayout()
-        self.btn_sel = QPushButton("Select Folder")
-        self.btn_proj = QPushButton("Project")
-        self.btn_util = QPushButton("Utils")
+        self.btn_sel = PushButton("Select Folder")
+        self.btn_proj = PushButton("Project")
+        self.btn_util = PushButton("Utils")
         self.lbl_status = QLabel("Select a project folder.")
 
         m_proj = QMenu(self)
-        m_proj.addAction("Analyze...").triggered.connect(self._analyze)
-        m_proj.addAction("Validate Textures...").triggered.connect(self._validate_textures)
+        m_proj.addAction("Analyze...").triggered.connect(self.controller.analyze_project)
+        m_proj.addAction("Validate Textures...").triggered.connect(self.controller.validate_textures)
         m_proj.addSeparator()
-        m_proj.addAction("Find Unused...").triggered.connect(self._unused)
-        m_proj.addAction("Find Missing...").triggered.connect(self._missing)
+        m_proj.addAction("Find Unused...").triggered.connect(self.controller.find_unused)
+        m_proj.addAction("Find Missing...").triggered.connect(self.controller.find_missing)
         m_proj.addSeparator()
-        m_proj.addAction("Lua Tools...").triggered.connect(self._lua)
-        m_proj.addAction("Clean Assets...").triggered.connect(self._clean)
+        m_proj.addAction("Lua Tools...").triggered.connect(self.controller.open_lua_toolkit)
+        m_proj.addAction("Clean Assets...").triggered.connect(self.controller.clean_assets)
         m_proj.addSeparator()
-        m_proj.addAction("To Lowercase...").triggered.connect(self._convert_lc)
+        m_proj.addAction("To Lowercase...").triggered.connect(self.controller.convert_lowercase)
         self.btn_proj.setMenu(m_proj)
 
         m_util = QMenu(self)
-        m_util.addAction("Packer...").triggered.connect(self._pack)
+        m_util.addAction("Packer...").triggered.connect(self.controller.open_packer)
         m_util.addSeparator()
-        m_util.addAction("Duplicate Finder...").triggered.connect(self._dupes)
-        m_util.addAction("TOD Converter...").triggered.connect(self._tod)
+        m_util.addAction("Duplicate Finder...").triggered.connect(self.controller.find_duplicates)
+        m_util.addAction("TOD Converter...").triggered.connect(self.controller.convert_tod)
         self.btn_util.setMenu(m_util)
 
         top.addWidget(self.btn_sel)
@@ -95,7 +84,7 @@ class MainWindow(QMainWindow):
         top.addWidget(self.lbl_status)
         layout.addLayout(top)
 
-        grp = QGroupBox("Real-time Watchdog")
+        grp = CardWidget()
         gl = QVBoxLayout(grp)
         ol = QHBoxLayout()
         self.opts = {}
@@ -105,23 +94,23 @@ class MainWindow(QMainWindow):
             ("dry_run", "Dry Run", False),
             ("show_detailed_log", "Debug Log", False),
         ]:
-            cb = QCheckBox(t)
+            cb = CheckBox(t)
             cb.setChecked(d)
             if k == "dry_run":
                 cb.setStyleSheet(f"color: {UIConfig.COLOR_DRY_RUN}; font-weight: bold;")
             self.opts[k] = cb
             ol.addWidget(cb)
-        self.btn_watch = QPushButton("Start Watchdog")
+        self.btn_watch = PushButton("Start Watchdog")
         gl.addLayout(ol)
         gl.addWidget(self.btn_watch)
         layout.addWidget(grp)
 
-        self.log = QTextEdit()
+        self.log = TextEdit()
         self.log.setReadOnly(True)
         self.log.setFont(UIConfig.FONT_MONOSPACE)
         layout.addWidget(self.log)
 
-        self.pbar = QProgressBar()
+        self.pbar = ProgressBar()
         self.statusBar().addPermanentWidget(self.pbar)
         self.pbar.hide()
 
@@ -170,6 +159,7 @@ class MainWindow(QMainWindow):
         if d:
             self.project_root = Path(d)
             logger.info(f"Selected: {d}")
+            InfoBar.success("Project Selected", f"Path: {d}", position=InfoBarPosition.TOP_RIGHT, parent=self)
             self._set_state(AppState.IDLE)
 
     def _toggle_watch(self):
@@ -196,128 +186,6 @@ class MainWindow(QMainWindow):
         self.pbar.setValue(0)
         self.task_manager.run_task(func, cb, self._error)
 
-    def on_task_done(self, res):
-        if res and "summary" in res:
-            QMessageBox.information(self, "Done", res["summary"])
-
-    def _clean(self):
-        if not self.can_run_task(require_project=True) or self.project_root is None:
-            return
-        project_root = self.project_root
-        dlg = CleanerDialog(self)
-        if dlg.exec():
-            opts = dlg.get_options()
-            self.run_task(lambda: ProjectCleaner(project_root, self.core_signals).run(**opts), self._clean_done)
-
-    def _clean_done(self, res):
-        if not res:
-            return
-        msg = QMessageBox(self)
-        msg.setWindowTitle("Cleanup")
-        msg.setText(res.get("summary", "Done"))
-        if f := res.get("failed_files"):
-            msg.setDetailedText("\n".join(f))
-        msg.exec()
-
-    def _convert_lc(self):
-        if not self.can_run_task(require_project=True) or self.project_root is None:
-            return
-        project_root = self.project_root
-        msg = "This will irreversibly rename ALL files and folders in the project to lowercase.\n\nARE YOU SURE?"
-        if QMessageBox.question(self, "Confirm Conversion", msg) == QMessageBox.StandardButton.Yes:
-            self.run_task(lambda: ProjectConverter(project_root, self.core_signals).run(), self.on_task_done)
-
-    def _dupes(self):
-        if not self.can_run_task(require_project=False):
-            return
-        dlg = DuplicateFinderDialog(self)
-        if self.project_root:
-            dlg.target_selector.set_path(self.project_root)
-
-        if dlg.exec():
-            ref, tgt = dlg.get_paths()
-            if ref and tgt:
-                self.run_task(lambda: DuplicateFinder(self.core_signals).run(ref, tgt), self.on_task_done)
-
-    def _tod(self):
-        if not self.can_run_task(require_project=False):
-            return
-        dlg = TimeOfDayDialog(self)
-        if dlg.exec():
-            f = dlg.get_file()
-            if f:
-                self.run_task(lambda: TimeOfDayConverter(self.core_signals).run(f), self.on_task_done)
-
-    def _analyze(self):
-        if not self.can_run_task(require_project=True) or self.project_root is None:
-            return
-        project_root = self.project_root
-        self.run_task(lambda: ProjectAnalyzer(project_root).run(), self._analyze_done)
-
-    def _analyze_done(self, res):
-        if not res:
-            return
-
-        prep = defaultdict(dict)
-
-        logger.info("--- [ANALYSIS] Project File Distribution Report ---")
-        logger.info(f"Total files scanned: {res.get('total_files', 0)}")
-        logger.info(f"Scan duration: {res.get('duration', 0.0):.2f}s")
-
-        if "extensions_counter" in res:
-            sorted_extensions = sorted(res["extensions_counter"].items(), key=lambda x: x[1], reverse=True)
-
-            for ext, count in sorted_extensions:
-                cat = next((c for c, e in AnalysisReportDialog.EXT_CATEGORIES.items() if ext in e), "Other")
-                prep[cat][ext] = count
-                logger.info(f"  Extension: {ext:<12} | Count: {count}")
-
-        logger.info("--- [ANALYSIS] End of Report ---")
-
-        dlg = AnalysisReportDialog(
-            self,
-            f"Total Files Scanned: {res.get('total_files', 0)} (Time: {res.get('duration', 0.0):.2f}s)",
-            prep,
-        )
-        dlg.exec()
-
-    def _validate_textures(self):
-        if not self.can_run_task(require_project=True) or self.project_root is None:
-            return
-        project_root = self.project_root
-        self.run_task(
-            lambda: TextureValidator(project_root, self.core_signals).run(),
-            lambda r: TextureReportDialog(self, r).exec(),
-        )
-
-    def _unused(self):
-        if not self.can_run_task(require_project=True) or self.project_root is None:
-            return
-        project_root = self.project_root
-        self.run_task(
-            lambda: UnusedAssetFinder(project_root, self.core_signals).run(),
-            lambda r: UnusedAssetsDialog(self, r).exec(),
-        )
-
-    def _missing(self):
-        if not self.can_run_task(require_project=True) or self.project_root is None:
-            return
-        project_root = self.project_root
-        self.run_task(
-            lambda: MissingAssetFinder(project_root, self.core_signals).run(),
-            lambda r: MissingAssetsDialog(self, r).exec(),
-        )
-
-    def _pack(self):
-        if not self.can_run_task(require_project=False):
-            return
-        PackerDialog(self).exec()
-
-    def _lua(self):
-        if not self.can_run_task(require_project=True):
-            return
-        LuaToolkitDialog(self).exec()
-
     @Slot(str)
     def append_log(self, msg):
         self.log.append(msg)
@@ -325,7 +193,7 @@ class MainWindow(QMainWindow):
     @Slot(str, str)
     def _error(self, t, m):
         self._set_state(AppState.IDLE)
-        QMessageBox.critical(self, t, m)
+        InfoBar.error(t, m, position=InfoBarPosition.TOP_RIGHT, parent=self)
 
     @Slot(int, int)
     def _progress(self, c, t):

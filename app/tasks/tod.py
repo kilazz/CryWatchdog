@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 from typing import TYPE_CHECKING
 
 from app.data.ce_params import LEGACY_MAP, ORDERED_PARAMS
+from app.tasks.models import TimeOfDayResult
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -73,9 +74,6 @@ class TimeOfDayConverter:
     TIME_SCALE = 144000.0
     FALLBACK_SUN_INTENSITY_SCALAR = 50000.0
     HDR_DYNAMIC_MULTIPLIER = 1.0
-
-    def __init__(self, signals):
-        self.signals = signals
 
     def _format_ce5_key(self, time_norm, value, flags):
         time_tick = round(float(time_norm) * self.TIME_SCALE)
@@ -165,7 +163,7 @@ class TimeOfDayConverter:
         wind = ET.SubElement(consts, "Wind", {"BreezeEnabled": "false"})
         ET.SubElement(wind, "WindVector", {"x": "1", "y": "0", "z": "0"})
 
-    def run(self, input_file: Path) -> dict:
+    def run(self, input_file: Path) -> TimeOfDayResult:
         logger.info(f"Converting TimeOfDay: {input_file.name}")
         try:
             content = input_file.read_text(encoding="latin-1", errors="ignore")
@@ -273,8 +271,8 @@ class TimeOfDayConverter:
 
             summary = f"Created:\n- {out_env.name}\n- {out_tod.name}"
             logger.info(f"✅ {summary}")
-            return {"summary": summary}
+            return TimeOfDayResult(summary=summary, created_files=[out_env.name, out_tod.name])
 
         except Exception as e:
             logger.error(f"Conversion failed: {e}", exc_info=True)
-            return {"summary": f"Error: {e}"}
+            return TimeOfDayResult(summary=f"Error: {e}", error=str(e))

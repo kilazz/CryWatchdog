@@ -7,16 +7,14 @@ from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
-    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QMessageBox,
-    QPushButton,
-    QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
 )
+from qfluentwidgets import CardWidget, InfoBar, PushButton, TreeWidget
 
 from app.config import UIConfig
 from app.tasks.lua import LuaToolkit
@@ -36,7 +34,7 @@ class LuaToolkitDialog(QDialog):
     def _init_ui(self):
         layout = QVBoxLayout(self)
 
-        status = QGroupBox("Status")
+        status = CardWidget()
         status_layout = QHBoxLayout(status)
         self.lbl_luac = QLabel("luac: ...")
         self.lbl_stylua = QLabel("stylua: ...")
@@ -44,35 +42,35 @@ class LuaToolkitDialog(QDialog):
         status_layout.addWidget(self.lbl_stylua)
         layout.addWidget(status)
 
-        grp_diag = QGroupBox("Diagnostics")
+        grp_diag = CardWidget()
         diag_layout = QVBoxLayout(grp_diag)
-        self.btn_diag = QPushButton("Run Diagnostics")
+        self.btn_diag = PushButton("Run Diagnostics")
         self.btn_diag.clicked.connect(self._run_diag)
         diag_layout.addWidget(self.btn_diag)
 
         self.lbl_prog = QLabel("Progress: -")
         diag_layout.addWidget(self.lbl_prog)
 
-        self.tree = QTreeWidget()
+        self.tree = TreeWidget()
         self.tree.setHeaderLabels(["File", "Status", "Msg"])
         self.tree.header().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.tree.setSortingEnabled(True)
-        self.tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
+        self.tree.setSelectionMode(TreeWidget.SelectionMode.ExtendedSelection)
         diag_layout.addWidget(self.tree)
         layout.addWidget(grp_diag)
 
         QShortcut(QKeySequence.StandardKey.Copy, self.tree, self._copy_selection)
         QShortcut(QKeySequence.StandardKey.SelectAll, self.tree, self.tree.selectAll)
 
-        grp_fmt = QGroupBox("Formatter")
+        grp_fmt = CardWidget()
         fmt_layout = QVBoxLayout(grp_fmt)
-        self.btn_fmt = QPushButton("Format All")
+        self.btn_fmt = PushButton("Format All")
         self.btn_fmt.clicked.connect(self._run_fmt)
         fmt_layout.addWidget(self.btn_fmt)
         layout.addWidget(grp_fmt)
 
     def _check_deps(self):
-        t = LuaToolkit(Path("."), None)
+        t = LuaToolkit(Path("."))
         ok_luac = t.luac.is_file()
         ok_stylua = t.stylua.is_file()
 
@@ -98,7 +96,10 @@ class LuaToolkitDialog(QDialog):
         self.btn_diag.setEnabled(False)
 
         self.main_window.run_task(
-            lambda: LuaToolkit(self.main_window.project_root, self.main_window.core_signals).run_diagnostics(),
+            lambda: LuaToolkit(
+                self.main_window.project_root,
+                progress_callback=lambda c, t: self.main_window.core_signals.progressUpdated.emit(c, t),
+            ).run_diagnostics(),
             self._on_diag_done,
         )
 
@@ -108,8 +109,11 @@ class LuaToolkitDialog(QDialog):
 
         if QMessageBox.question(self, "Confirm", "Irreversible format?") == QMessageBox.StandardButton.Yes:
             self.main_window.run_task(
-                lambda: LuaToolkit(self.main_window.project_root, self.main_window.core_signals).run_formatting({}),
-                self.main_window.on_task_done,
+                lambda: LuaToolkit(
+                    self.main_window.project_root,
+                    progress_callback=lambda c, t: self.main_window.core_signals.progressUpdated.emit(c, t),
+                ).run_formatting({}),
+                lambda res: InfoBar.success("Formatting", res.summary, parent=self),
             )
 
     @Slot(int, int)

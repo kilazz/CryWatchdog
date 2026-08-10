@@ -1,57 +1,59 @@
+from __future__ import annotations
+
 from collections import defaultdict
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QDialog,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
-    QPushButton,
-    QTreeWidget,
     QTreeWidgetItem,
     QTreeWidgetItemIterator,
     QVBoxLayout,
 )
+from qfluentwidgets import CardWidget, CheckBox, InfoBar, PushButton, TreeWidget
 
 from app.config import UIConfig
 
+if TYPE_CHECKING:
+    from app.tasks.models import MissingAssetResult, UnusedAssetResult
+
 
 class UnusedAssetsDialog(QDialog):
-    def __init__(self, parent, results: dict):
+    def __init__(self, parent, results: UnusedAssetResult):
         super().__init__(parent)
-        self.setWindowTitle(f"Unused Assets Report (Time: {results['duration']:.2f}s)")
+        self.setWindowTitle(f"Unused Assets Report (Time: {results.duration:.2f}s)")
         self.resize(600, 700)
         layout = QVBoxLayout(self)
 
-        info_group = QGroupBox("Scan Summary")
+        info_group = CardWidget()
         info_layout = QVBoxLayout(info_group)
-        info_layout.addWidget(QLabel(f"Total Assets Scanned: {results['total_assets']:,}"))
-        count_label = QLabel(f"Potential Unused Assets: {len(results['unused_files'])}")
+        info_layout.addWidget(QLabel(f"Total Assets Scanned: {results.total_assets:,}"))
+        count_label = QLabel(f"Potential Unused Assets: {len(results.unused_files)}")
         count_label.setStyleSheet(
-            f"color: {UIConfig.COLOR_ERROR if results['unused_files'] else UIConfig.COLOR_SUCCESS}; font-weight: bold;"
+            f"color: {UIConfig.COLOR_ERROR if results.unused_files else UIConfig.COLOR_SUCCESS}; font-weight: bold;"
         )
         info_layout.addWidget(count_label)
         layout.addWidget(info_group)
 
         layout.addWidget(QLabel("Orphaned Files:"))
-        self.list_widget = QTreeWidget()
+        self.list_widget = TreeWidget()
         self.list_widget.setHeaderLabel("File Path (Relative)")
         self.list_widget.setFont(UIConfig.FONT_MONOSPACE)
 
-        for f in results["unused_files"]:
+        for f in results.unused_files:
             item = QTreeWidgetItem([f])
             item.setForeground(0, QColor(UIConfig.COLOR_ERROR))
             self.list_widget.addTopLevelItem(item)
         layout.addWidget(self.list_widget)
 
         btn_box = QHBoxLayout()
-        copy_btn = QPushButton("Copy List")
+        copy_btn = PushButton("Copy List")
         copy_btn.clicked.connect(self._copy)
-        close_btn = QPushButton("Close")
+        close_btn = PushButton("Close")
         close_btn.clicked.connect(self.accept)
         btn_box.addWidget(copy_btn)
         btn_box.addStretch()
@@ -59,22 +61,20 @@ class UnusedAssetsDialog(QDialog):
         layout.addLayout(btn_box)
 
     def _copy(self):
-        text = "\n".join(
-            [
-                item.text(0)
-                for i in range(self.list_widget.topLevelItemCount())
-                if (item := self.list_widget.topLevelItem(i))
-            ]
-        )
-        QApplication.clipboard().setText(text)
-        QMessageBox.information(self, "Copied", "Paths copied to clipboard.")
+        lines = [
+            item.text(0)
+            for i in range(self.list_widget.topLevelItemCount())
+            if (item := self.list_widget.topLevelItem(i))
+        ]
+        QApplication.clipboard().setText("\n".join(lines))
+        InfoBar.success("Copied", "Paths copied to clipboard.", parent=self)
 
 
 class MissingAssetsDialog(QDialog):
-    def __init__(self, parent, results: dict):
+    def __init__(self, parent, results: MissingAssetResult):
         super().__init__(parent)
-        self.missing_map = results.get("missing_map", {})
-        self.setWindowTitle(f"Missing Assets Report (Time: {results['duration']:.2f}s)")
+        self.missing_map = results.missing_map
+        self.setWindowTitle(f"Missing Assets Report (Time: {results.duration:.2f}s)")
         self.resize(800, 600)
         layout = QVBoxLayout(self)
 
@@ -85,23 +85,23 @@ class MissingAssetsDialog(QDialog):
             f"color: {UIConfig.COLOR_ERROR if count > 0 else UIConfig.COLOR_SUCCESS}; font-weight: bold;"
         )
         info_layout.addWidget(status)
-        info_layout.addWidget(QLabel(f"(Scanned {results['total_scanned']} files)"))
+        info_layout.addWidget(QLabel(f"(Scanned {results.total_scanned} files)"))
         info_layout.addStretch()
-        self.group_cb = QCheckBox("Group by File Extension")
+        self.group_cb = CheckBox("Group by File Extension")
         self.group_cb.toggled.connect(self._populate)
         info_layout.addWidget(self.group_cb)
         layout.addLayout(info_layout)
 
-        self.tree = QTreeWidget()
+        self.tree = TreeWidget()
         self.tree.setHeaderLabels(["Missing Asset / Group", "Count / Ext"])
         self.tree.setColumnWidth(0, 500)
         self.tree.setFont(UIConfig.FONT_MONOSPACE)
         layout.addWidget(self.tree)
 
         btn_box = QHBoxLayout()
-        copy_btn = QPushButton("Copy Report")
+        copy_btn = PushButton("Copy Report")
         copy_btn.clicked.connect(self._copy)
-        close_btn = QPushButton("Close")
+        close_btn = PushButton("Close")
         close_btn.clicked.connect(self.accept)
         btn_box.addWidget(copy_btn)
         btn_box.addStretch()
@@ -131,10 +131,10 @@ class MissingAssetsDialog(QDialog):
     def _add_item(self, parent, path, containers):
         item = (
             QTreeWidgetItem([path, Path(path).suffix.lower()])
-            if isinstance(parent, QTreeWidget)
+            if isinstance(parent, TreeWidget)
             else QTreeWidgetItem([path, f"{len(containers)} refs"])
         )
-        if not isinstance(parent, QTreeWidget):
+        if not isinstance(parent, TreeWidget):
             parent.addChild(item)
         else:
             parent.addTopLevelItem(item)
@@ -153,4 +153,4 @@ class MissingAssetsDialog(QDialog):
             lines.append(f"{indent}{item.text(0)}")
             it += 1
         QApplication.clipboard().setText("\n".join(lines))
-        QMessageBox.information(self, "Copied", "Report copied.")
+        InfoBar.success("Copied", "Report copied to clipboard.", parent=self)

@@ -9,17 +9,19 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING
 
 from app.config import AppConfig, LuaFileAnalysisResult
+from app.tasks.models import LuaFormattingResult
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
 class LuaToolkit:
-    def __init__(self, root: Path, signals):
+    def __init__(self, root: Path, progress_callback: Callable[[int, int], None] | None = None):
         self.root = root
-        self.signals = signals
+        self.progress_callback = progress_callback
         self.luac = AppConfig.LUA_COMPILER_PATH
         self.stylua = AppConfig.STYLUA_PATH
 
@@ -94,8 +96,8 @@ class LuaToolkit:
                 future_map = {executor.submit(self._check_single_file, f): f for f in files}
 
                 for i, future in enumerate(as_completed(future_map), 1):
-                    if i % 10 == 0 or i == len(files):
-                        self.signals.progressUpdated.emit(i, len(files))
+                    if (i % 10 == 0 or i == len(files)) and self.progress_callback:
+                        self.progress_callback(i, len(files))
 
                     try:
                         results.append(future.result())
@@ -110,18 +112,18 @@ class LuaToolkit:
         logger.info(f"Diagnostics finished. Processed {len(results)} files.")
         return results
 
-    def run_formatting(self, config: dict) -> dict:
+    def run_formatting(self, config: dict) -> LuaFormattingResult:
         if not self.stylua.is_file():
-            return {"summary": f"Stylua not found at: {self.stylua}"}
+            return LuaFormattingResult(summary=f"Stylua not found at: {self.stylua}")
 
         try:
             files = [str(p) for p in self.root.rglob("*.lua")]
         except Exception as e:
             logger.error(f"Error scanning for files: {e}")
-            return {"summary": f"Error scanning for files: {e}"}
+            return LuaFormattingResult(summary=f"Error scanning for files: {e}")
 
         if not files:
-            return {"summary": "No Lua files found."}
+            return LuaFormattingResult(summary="No Lua files found.")
 
         base_cmd = [str(self.stylua), "--no-editorconfig"]
         for k, v in config.items():
@@ -138,7 +140,8 @@ class LuaToolkit:
         for i in range(0, len(files), CHUNK_SIZE):
             chunk = files[i : i + CHUNK_SIZE]
 
-            self.signals.progressUpdated.emit(min(i + CHUNK_SIZE, len(files)), len(files))
+            if self.progress_callback:
+                self.progress_callback(min(i + CHUNK_SIZE, len(files)), len(files))
             logger.debug(f"Formatting batch {i // CHUNK_SIZE + 1}/{total_chunks}...")
 
             is_ok, msg = self._run_cmd(base_cmd + chunk)
@@ -149,8 +152,10 @@ class LuaToolkit:
                 logger.warning(f"Formatting batch failed: {msg}")
 
         if failed_chunks == 0:
-            return {"summary": "Formatting complete."}
+            return LuaFormattingResult(summary="Formatting complete.")
         else:
-            return {
-                "summary": f"Formatting completed with errors in {failed_chunks} batches.\nLast error: {last_error}"
-            }
+            return LuaFormattingResult(
+                summary=f"Formatting completed with errors in {failed_chunks} batches.\nLast error: {last_error}",
+                failed_chunks=failed_chunks,
+                last_error=last_error,
+            )

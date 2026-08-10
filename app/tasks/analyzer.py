@@ -5,40 +5,38 @@ import time
 from collections import Counter
 from typing import TYPE_CHECKING
 
+from app.tasks.models import AnalyzerResult
+
 if TYPE_CHECKING:
     from pathlib import Path
 
 
 class ProjectAnalyzer:
-    """A task class for analyzing project file types and counts."""
-
     def __init__(self, project_root: Path):
         self.project_root = project_root
 
-    def run(self) -> dict:
+    def run(self) -> AnalyzerResult:
         start_time = time.time()
-        extensions_counter = Counter()
+        extensions_counter: Counter[str] = Counter()
         total_files = 0
 
         try:
             for _, _, files in os.walk(self.project_root):
                 for filename in files:
                     total_files += 1
-                    ext = os.path.splitext(filename)[1].lower()
-                    if not ext:
-                        ext = ".<no_ext>"
+                    ext = os.path.splitext(filename)[1].lower() or ".<no_ext>"
                     extensions_counter[ext] += 1
 
         except Exception as e:
-            return {
-                "total_files": total_files,
-                "duration": time.time() - start_time,
-                "extensions_counter": extensions_counter,
-                "error": str(e),
-            }
+            return AnalyzerResult(
+                total_files=total_files,
+                duration=time.time() - start_time,
+                extensions_counter=extensions_counter,
+                error=str(e),
+            )
 
-        return {
-            "total_files": total_files,
-            "duration": time.time() - start_time,
-            "extensions_counter": extensions_counter,
-        }
+        return AnalyzerResult(
+            total_files=total_files,
+            duration=time.time() - start_time,
+            extensions_counter=extensions_counter,
+        )
